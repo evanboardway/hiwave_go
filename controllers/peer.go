@@ -67,5 +67,5 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("%+v\n", sessionDescription)
 
-	fmt.Fprintf(w, "%v", "yeet")
+	fmt.Fprintf(w, "%v", newPeer.connection.LocalDescription())
 }
