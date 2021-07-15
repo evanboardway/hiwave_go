@@ -6,22 +6,41 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/pion/webrtc/v2"
 )
 
-// Existing code from above
 func handleRequests() {
-	// creates a new instance of a mux router
 	myRouter := mux.NewRouter().StrictSlash(true)
-	// replace http.HandleFunc with myRouter.HandleFunc
-	myRouter.HandleFunc("/", homePage)
-	// finally, instead of passing in nil, we want
-	// to pass in our newly created router as the second
-	// argument
+	myRouter.HandleFunc("/connect", initPeer)
+
 	log.Fatal(http.ListenAndServe(":10000", myRouter))
 }
 
-func homePage(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Welcome to the HomePage!")
+func initPeer(w http.ResponseWriter, r *http.Request) {
+	offerPc, _ := webrtc.NewPeerConnection(webrtc.Configuration{})
+	answerPc, _ := webrtc.NewPeerConnection(webrtc.Configuration{})
+
+	offerPc.OnICECandidate(func(c *webrtc.ICECandidate) {
+		if c != nil {
+			answerPc.AddICECandidate(c.ToJSON())
+		}
+	})
+
+	answerPc.OnICECandidate(func(c *webrtc.ICECandidate) {
+		if c != nil {
+			offerPc.AddICECandidate(c.ToJSON())
+		}
+	})
+
+	offer, _ := offerPc.CreateOffer(nil)
+	offerPc.SetLocalDescription(offer)
+	answerPc.SetRemoteDescription(offer)
+
+	answer, _ := offerPc.CreateOffer(nil)
+	answerPc.SetRemoteDescription(answer)
+	offerPc.SetLocalDescription(answer)
+
+	fmt.Fprintf(w, "%v", answer)
 	fmt.Println("Endpoint Hit: homePage")
 }
 
