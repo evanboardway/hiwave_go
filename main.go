@@ -5,46 +5,27 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/pion/webrtc/v2"
 )
 
+var peers []*webrtc.PeerConnection
+
 func handleRequests() {
-	myRouter := mux.NewRouter().StrictSlash(true)
-	myRouter.HandleFunc("/connect", initPeer)
 
-	log.Fatal(http.ListenAndServe(":10000", myRouter))
-}
+	hiwaveRouter := mux.NewRouter().StrictSlash(true)
+	hiwaveRouter.HandleFunc("/connect", initPeer).Methods("POST")
 
-func initPeer(w http.ResponseWriter, r *http.Request) {
-	offerPc, _ := webrtc.NewPeerConnection(webrtc.Configuration{})
-	answerPc, _ := webrtc.NewPeerConnection(webrtc.Configuration{})
-
-	offerPc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c != nil {
-			answerPc.AddICECandidate(c.ToJSON())
-		}
-	})
-
-	answerPc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c != nil {
-			offerPc.AddICECandidate(c.ToJSON())
-		}
-	})
-
-	offer, _ := offerPc.CreateOffer(nil)
-	offerPc.SetLocalDescription(offer)
-	answerPc.SetRemoteDescription(offer)
-
-	answer, _ := offerPc.CreateOffer(nil)
-	answerPc.SetRemoteDescription(answer)
-	offerPc.SetLocalDescription(answer)
-
-	fmt.Fprintf(w, "%v", answer)
-	fmt.Println("Endpoint Hit: homePage")
+	log.Fatal(
+		http.ListenAndServe(":5000",
+			handlers.CORS(
+				handlers.AllowedHeaders([]string{"X-Requested-With", "Content-Type", "Authorization", "Access-Control-Allow-Origin"}),
+				handlers.AllowedMethods([]string{"GET", "POST", "PUT", "HEAD", "OPTIONS"}),
+				handlers.AllowedOrigins([]string{"*"}))(hiwaveRouter)))
 }
 
 func main() {
-	fmt.Println("Rest API v2.0 - Mux Routers")
+	fmt.Println("Hiwave server started")
 	handleRequests()
 }
