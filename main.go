@@ -5,17 +5,15 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/evanboardway/hiwave_go/controllers"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
-	"github.com/pion/webrtc/v2"
 )
-
-var peers []*webrtc.PeerConnection
 
 func handleRequests() {
 
 	hiwaveRouter := mux.NewRouter().StrictSlash(true)
-	hiwaveRouter.HandleFunc("/connect", initPeer).Methods("POST")
+	hiwaveRouter.HandleFunc("/connect", controllers.InitPeer).Methods("POST")
 
 	log.Fatal(
 		http.ListenAndServe(":5000",
