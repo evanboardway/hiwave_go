@@ -21,6 +21,8 @@ func newPeer(connection *webrtc.PeerConnection) *Peer {
 }
 
 func InitPeer(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	// Define configuration for peer objects. Defines ice server addresses.
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
@@ -49,23 +51,38 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 	peer.SetRemoteDescription(sessionDescription)
 
 	// Create an answer with empty options
-	answer, _ := peer.CreateAnswer(&webrtc.AnswerOptions{})
+	answer, _ := peer.CreateAnswer(nil)
 
 	// Set the local description to our response to the clients offer
 	peer.SetLocalDescription(answer)
+
+	peer.OnTrack(func(t *webrtc.Track, r *webrtc.RTPReceiver) {
+		fmt.Printf("Remote Track: %+v", t)
+		peer.AddTrack(t)
+	})
 
 	// create a new peer object with our webrtc.NewPeerConnection object
 	newPeer := newPeer(peer)
 
 	// We need to keep a reference to their track so we can append it to another peers track.
-	newPeer.connection.OnTrack(func(t *webrtc.Track, r *webrtc.RTPReceiver) {
-		newPeer.track = *t
-	})
+	// newPeer.connection.OnTrack(func(t *webrtc.Track, r *webrtc.RTPReceiver) {
+	// 	newPeer.track = *t
+	// })
 
 	// Add our newly created peer to the connectedPeers array
 	connectedPeers = append(connectedPeers, newPeer)
 
-	fmt.Printf("%+v\n", sessionDescription)
+	fmt.Printf("Peers: %+v\n", connectedPeers)
 
-	fmt.Fprintf(w, "%v", newPeer.connection.LocalDescription())
+	js := make(map[string]string)
+	js["type"] = "answer"
+	js["sdp"] = answer.SDP
+
+	response, marshErr := json.Marshal(js)
+
+	if marshErr != nil {
+		fmt.Printf(marshErr.Error())
+	}
+
+	fmt.Fprintf(w, "%s", response)
 }
