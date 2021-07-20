@@ -12,6 +12,10 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
+var (
+	audioTrack *webrtc.TrackLocalStaticRTP
+)
+
 const (
 	rtcpPLIInterval = time.Second * 3
 )
@@ -39,31 +43,26 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Allow us to receive 1 ausio track
-	if _, err = peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {
-		panic(err)
-	}
-
-	localTrackChan := make(chan *webrtc.TrackLocalStaticRTP)
+	peerConnection.AddTrack(audioTrack)
 
 	// Handle the ontrack event for peer.
 	peerConnection.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		go func() {
 			ticker := time.NewTicker(rtcpPLIInterval)
 			for range ticker.C {
-				if rtcpSendErr := peerConnection.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(remoteTrack.SSRC())}}); rtcpSendErr != nil {
+				if rtcpSendErr := peerConnection.WriteRTCP([]rtcp.Packet{&rtcp.RawPacket{}}); rtcpSendErr != nil {
 					fmt.Println(rtcpSendErr)
 				}
 			}
 		}()
 
 		// create a local track
-		localTrack, newTrackErr := webrtc.NewTrackLocalStaticRTP(remoteTrack.Codec().RTPCodecCapability, "audio", "outbound")
+		audioTrack, newTrackErr := webrtc.NewTrackLocalStaticRTP(remoteTrack.Codec().RTPCodecCapability, "audio", "outbound")
 		if newTrackErr != nil {
 			panic(newTrackErr)
 		}
-		localTrackChan <- localTrack
 
+		// read audio into the audioTrack we attached to the peer connection
 		rtpBuf := make([]byte, 1400)
 		for {
 			i, _, readErr := remoteTrack.Read(rtpBuf)
@@ -72,7 +71,7 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// ErrClosedPipe means we don't have any subscribers, this is ok if no peers have connected yet
-			if _, err = localTrack.Write(rtpBuf[:i]); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+			if _, err = audioTrack.Write(rtpBuf[:i]); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 				panic(err)
 			}
 		}
@@ -86,7 +85,7 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 
 	// Handle decoding error and respond to http client with a bad request.
 	if decodeErr != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, decodeErr.Error(), http.StatusBadRequest)
 		return
 	}
 
