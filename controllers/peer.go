@@ -2,9 +2,7 @@ package controllers
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -14,10 +12,6 @@ import (
 
 var (
 	audioTrack *webrtc.TrackLocalStaticRTP
-)
-
-const (
-	rtcpPLIInterval = time.Second * 3
 )
 
 func InitPeer(w http.ResponseWriter, r *http.Request) {
@@ -37,48 +31,38 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		panic(err)
 	}
-	defer func() {
-		if cErr := peerConnection.Close(); cErr != nil {
-			fmt.Printf("Cannot close peer connecton.\n %+v \n", cErr)
+	// defer func() {
+	// 	if cErr := peerConnection.Close(); cErr != nil {
+	// 		fmt.Printf("Cannot close peer connecton.\n %+v \n", cErr)
+	// 	}
+	// }()
+
+	// create a local track
+	audioTrack, newTrackErr := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "outbound")
+	if newTrackErr != nil {
+		panic(newTrackErr)
+	}
+
+	// add the treack to the connection
+	rtpSender, err := peerConnection.AddTrack(audioTrack)
+	if err != nil {
+		panic(err)
+	}
+
+	go func() {
+		rtcpBuf := make([]byte, 1500)
+		for {
+			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+				return
+			}
+			fmt.Printf("%+v \n", rtcpBuf)
 		}
 	}()
 
-	peerConnection.AddTrack(audioTrack)
-
-	// Handle the ontrack event for peer.
-	peerConnection.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		go func() {
-			ticker := time.NewTicker(rtcpPLIInterval)
-			for range ticker.C {
-				if rtcpSendErr := peerConnection.WriteRTCP([]rtcp.Packet{&rtcp.RawPacket{}}); rtcpSendErr != nil {
-					fmt.Println(rtcpSendErr)
-				}
-			}
-		}()
-
-		// create a local track
-		audioTrack, newTrackErr := webrtc.NewTrackLocalStaticRTP(remoteTrack.Codec().RTPCodecCapability, "audio", "outbound")
-		if newTrackErr != nil {
-			panic(newTrackErr)
-		}
-
-		// read audio into the audioTrack we attached to the peer connection
-		rtpBuf := make([]byte, 1400)
-		for {
-			i, _, readErr := remoteTrack.Read(rtpBuf)
-			if readErr != nil {
-				panic(readErr)
-			}
-
-			// ErrClosedPipe means we don't have any subscribers, this is ok if no peers have connected yet
-			if _, err = audioTrack.Write(rtpBuf[:i]); err != nil && !errors.Is(err, io.ErrClosedPipe) {
-				panic(err)
-			}
-		}
-	})
-
 	// Create a session description var to set as the body of the request
 	var sessionDescription webrtc.SessionDescription
+
+	fmt.Printf("Body: %+v\n", r)
 
 	// Try to decode response body into the sessionDescription var.
 	decodeErr := json.NewDecoder(r.Body).Decode(&sessionDescription)
@@ -91,6 +75,48 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 
 	// set the remote description to the sessionDescription variable created earlier
 	peerConnection.SetRemoteDescription(sessionDescription)
+
+	// Handle the ontrack event for peer.
+	peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+
+		go func() {
+			ticker := time.NewTicker(time.Second * 3)
+			for range ticker.C {
+				errSend := peerConnection.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}})
+				if errSend != nil {
+					fmt.Println(errSend)
+				}
+			}
+		}()
+
+		fmt.Printf("Track has started, of type %d: %s \n", track.PayloadType(), track.Codec().MimeType)
+		for {
+			// Read RTP packets being sent to Pion
+			rtp, _, readErr := track.ReadRTP()
+			if readErr != nil {
+				panic(readErr)
+			}
+
+			if writeErr := audioTrack.WriteRTP(rtp); writeErr != nil {
+				panic(writeErr)
+			}
+		}
+
+	})
+
+	// Set the handler for Peer connection state
+	// This will notify you when the peer has connected/disconnected
+	peerConnection.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		fmt.Printf("Peer Connection State has changed: %s\n", s.String())
+
+		if s == webrtc.PeerConnectionStateFailed {
+			// Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
+			// Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
+			// Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
+			fmt.Println("Peer Connection has gone to failed exiting")
+			panic(s)
+		}
+	})
 
 	// Create an answer with empty options
 	answer, _ := peerConnection.CreateAnswer(nil)
