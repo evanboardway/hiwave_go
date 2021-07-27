@@ -59,18 +59,21 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 	peerConnection, err := webrtc.NewPeerConnection(config)
 	if err != nil {
 		fmt.Printf("%+v\n", err)
-		return
 	}
 
 	// When this frame returns close the PeerConnection
 	defer peerConnection.Close() //nolint
 
+	// Create a new TrackLocal with the same codec as our incoming
+	trackLocal, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
+	if err != nil {
+		panic(err)
+	}
+
 	// Accept an incoming audio track
-	if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
-		Direction: webrtc.RTPTransceiverDirectionRecvonly,
-	}); err != nil {
-		fmt.Printf("%+v\n", err)
-		return
+	if _, err := peerConnection.AddTransceiverFromTrack(trackLocal, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
+		fmt.Println(err)
 	}
 
 	// Trickle ICE handler
@@ -100,14 +103,6 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 
 	peerConnection.OnTrack(func(tr *webrtc.TrackRemote, r *webrtc.RTPReceiver) {
 		fmt.Println("ONTRACK")
-		// Create a new TrackLocal with the same codec as our incoming
-		trackLocal, err := webrtc.NewTrackLocalStaticRTP(tr.Codec().RTPCodecCapability, tr.ID(), tr.StreamID())
-		if err != nil {
-			panic(err)
-		}
-
-		// Add the created track to the peerConnection for loopback
-		peerConnection.AddTrack(trackLocal)
 
 		buff := make([]byte, 1500)
 		for {
