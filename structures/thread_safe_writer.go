@@ -6,12 +6,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type threadSafeWriter struct {
+type ThreadSafeWriter struct {
 	*websocket.Conn
 	sync.Mutex
 }
 
-func (t *threadSafeWriter) WriteJSON(v interface{}) error {
+func (t *ThreadSafeWriter) WriteJSON(v interface{}) error {
 	t.Lock()
 	defer t.Unlock()
 
