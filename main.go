@@ -29,6 +29,7 @@ func main() {
 
 func track(w http.ResponseWriter, r *http.Request) {
 
+	// peerConnection.AddTrack(localTracc)
 }
 
 func InitPeer(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +106,8 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 	peerConnection.OnTrack(func(tr *webrtc.TrackRemote, r *webrtc.RTPReceiver) {
 		fmt.Println("ONTRACK")
 
+		localTracc, _ := webrtc.NewTrackLocalStaticRTP(tr.Codec().RTPCodecCapability, tr.ID(), tr.StreamID())
+
 		buff := make([]byte, 1500)
 		for {
 			i, _, err := tr.Read(buff)
@@ -112,7 +115,7 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			if _, err = outboundAudio.Write(buff[:i]); err != nil {
+			if _, err = localTracc.Write(buff[:i]); err != nil {
 				return
 			}
 		}
