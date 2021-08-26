@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/evanboardway/hiwave_go/structures"
+	"github.com/evanboardway/hiwave_go/types"
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
 )
@@ -16,23 +16,20 @@ var (
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
 
-	connectedClients []*structures.Client
+	connectedClients []*Client
 )
 
 // This is our entry point to the application. Websocket listens and is handled by the controllers.
 func main() {
 	fmt.Println("Hiwave server started")
-	http.HandleFunc("/websocket", InitPeer)
-	http.HandleFunc("/ps", track)
+	http.HandleFunc("/websocket", init_peer)
 	http.ListenAndServe(":5000", nil)
 }
 
-func track(w http.ResponseWriter, r *http.Request) {
+func init_peer(w http.ResponseWriter, r *http.Request) {
 
-	// peerConnection.AddTrack(localTracc)
-}
+	// go func() {
 
-func InitPeer(w http.ResponseWriter, r *http.Request) {
 	// Upgrade HTTP request to Websocket
 	unsafeConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -40,10 +37,10 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := &structures.ThreadSafeWriter{unsafeConn, sync.Mutex{}}
+	c := &types.ThreadSafeWriter{unsafeConn, sync.Mutex{}}
 
 	// When this frame returns close the Websocket
-	defer c.Close() //nolint
+	// defer c.Close() //nolint
 
 	// Configure ICE servers
 	config := webrtc.Configuration{
@@ -64,7 +61,7 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 	defer peerConnection.Close() //nolint
 
 	// Append this client to our list of clients
-	// connectedClients = append(connectedClients, structures.NewClient(c.Conn, peerConnection))
+	// connectedClients = append(connectedClients, types.NewClient(c.Conn, peerConnection))
 
 	// Create a new TrackLocal
 	outboundAudio, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
@@ -90,7 +87,7 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if writeErr := c.WriteJSON(&structures.WebsocketMessage{
+		if writeErr := c.WriteJSON(&types.WebsocketMessage{
 			Event: "candidate",
 			Data:  string(candidateString),
 		}); writeErr != nil {
@@ -139,7 +136,7 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write the offer to the socket
-	if err = c.Conn.WriteJSON(&structures.WebsocketMessage{
+	if err = c.Conn.WriteJSON(&types.WebsocketMessage{
 		Event: "offer",
 		Data:  string(offerString),
 	}); err != nil {
@@ -147,7 +144,7 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read messages coming from the socket on a loop and handle accordingly.
-	message := &structures.WebsocketMessage{}
+	message := &types.WebsocketMessage{}
 	for {
 		_, raw, err := c.ReadMessage()
 		if err != nil {
@@ -184,4 +181,5 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// }()
 }
