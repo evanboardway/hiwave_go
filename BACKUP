@@ -185,3 +185,62 @@ func InitPeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 }
+
+// Thread safe type
+
+package types
+
+import (
+	"sync"
+
+	"github.com/gorilla/websocket"
+)
+
+type ThreadSafeWriter struct {
+	*websocket.Conn
+	sync.Mutex
+}
+
+func (t *ThreadSafeWriter) WriteJSON(v interface{}) error {
+	t.Lock()
+	defer t.Unlock()
+
+	return t.Conn.WriteJSON(v)
+}
+
+// Message
+
+package types
+
+type WebsocketMessage struct {
+	Event string `json:"event"`
+	Data  string `json:"data"`
+}
+
+// Client .go
+
+package main
+
+import (
+	"github.com/gorilla/websocket"
+	"github.com/pion/webrtc/v3"
+)
+
+type Client struct {
+	// Websocket connection to communicate
+	conn *websocket.Conn
+
+	// A place to store our incoming audio track
+	audioTrack *webrtc.TrackLocalStaticRTP
+
+	// Peer connection object
+	peerConnection *webrtc.PeerConnection
+}
+
+func NewClient(connection *websocket.Conn, track *webrtc.TrackLocalStaticRTP, peer *webrtc.PeerConnection) *Client {
+	return &Client{
+		conn:           connection,
+		audioTrack:     track,
+		peerConnection: peer,
+	}
+}
