@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/evanboardway/hiwave_go/types"
 	"github.com/gorilla/websocket"
@@ -43,5 +44,8 @@ func initPeer(w http.ResponseWriter, r *http.Request) {
 		Event: "test",
 		Data:  string(asd),
 	}
-	safeConn.Conn.WriteJSON(message)
+	for {
+		time.Sleep(2 * time.Second)
+		safeConn.Conn.WriteJSON(message)
+	}
 }
