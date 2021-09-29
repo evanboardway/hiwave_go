@@ -19,7 +19,7 @@ var (
 )
 
 func main() {
-	nucleus := modules.CreateNucleus()
+	nucleus = modules.CreateNucleus()
 	fmt.Println("Hiwave server started")
 	http.HandleFunc("/websocket", websocketHandler)
 	http.ListenAndServe(":5000", nil)
@@ -33,7 +33,20 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	safeConn := &types.ThreadSafeWriter{unsafeConn, sync.Mutex{}}
+	// Wrap socket in a mutex that can lock the socket for write.
+	safeConn := &types.ThreadSafeWriter{unsafeConn, sync.RWMutex{}}
 	defer safeConn.Conn.Close()
+
+	// Create a new client. Give it the socket and the nucleus's phone number
+	newClient := modules.NewClient(safeConn, nucleus)
+
+	// Start the write loop for the newly created client in a go routine.
+	go modules.Writer(newClient)
+
+	// Tell the nucleus who the client is.
+	// nucleus.Subscribe <- newClient
+
+	// Start the read loop for the newly created client in a go routine.
+	go modules.Reader(newClient)
 
 }

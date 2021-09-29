@@ -1,5 +1,11 @@
 package modules
 
+import (
+	"sync"
+
+	"github.com/google/uuid"
+)
+
 // The nucleus is the place where each client is stored.
 // The nucleus can write to each of the clients through their channels.
 
@@ -11,7 +17,10 @@ type Nucleus struct {
 	Unsubscribe chan *Client
 
 	// A map of clients subscribed to the hub
-	Clients map[*Client]struct{}
+	Clients map[uuid.UUID]*Client
+
+	// Mutex to make sub and unsub chans one user only
+	Mutex sync.Mutex
 }
 
 // Create a nucleus and return a pointer to it.
@@ -19,6 +28,21 @@ func CreateNucleus() *Nucleus {
 	return &Nucleus{
 		Subscribe:   make(chan *Client),
 		Unsubscribe: make(chan *Client),
-		Clients:     make(map[*Client]struct{}),
+		Clients:     make(map[uuid.UUID]*Client),
+	}
+}
+
+func Enable(nucleus *Nucleus) {
+	for {
+		select {
+		case sub := <-nucleus.Subscribe:
+			nucleus.Mutex.Lock()
+			nucleus.Clients[sub.UUID] = sub
+			nucleus.Mutex.Unlock()
+		case unsub := <-nucleus.Unsubscribe:
+			nucleus.Mutex.Lock()
+			delete(nucleus.Clients, unsub.UUID)
+			nucleus.Mutex.Unlock()
+		}
 	}
 }
