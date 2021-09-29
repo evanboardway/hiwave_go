@@ -1,12 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
+	"github.com/evanboardway/hiwave_go/modules"
 	"github.com/evanboardway/hiwave_go/types"
 	"github.com/gorilla/websocket"
 )
@@ -16,17 +15,17 @@ var (
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
 
-	// addr = flag.String("addr", "localhost:8080", "http service address")
-	test = false
+	nucleus *modules.Nucleus
 )
 
 func main() {
+	nucleus := modules.CreateNucleus()
 	fmt.Println("Hiwave server started")
-	http.HandleFunc("/websocket", initPeer)
+	http.HandleFunc("/websocket", websocketHandler)
 	http.ListenAndServe(":5000", nil)
 }
 
-func initPeer(w http.ResponseWriter, r *http.Request) {
+func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade HTTP request to Websocket
 	unsafeConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -37,15 +36,4 @@ func initPeer(w http.ResponseWriter, r *http.Request) {
 	safeConn := &types.ThreadSafeWriter{unsafeConn, sync.Mutex{}}
 	defer safeConn.Conn.Close()
 
-	asd, err := json.Marshal("testing")
-
-	// Example message construction
-	message := types.WebsocketMessage{
-		Event: "test",
-		Data:  string(asd),
-	}
-	for {
-		time.Sleep(2 * time.Second)
-		safeConn.Conn.WriteJSON(message)
-	}
 }
