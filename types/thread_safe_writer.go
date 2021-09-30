@@ -7,13 +7,13 @@ import (
 )
 
 type ThreadSafeWriter struct {
-	*websocket.Conn
-	sync.Mutex
+	Conn  *websocket.Conn
+	Mutex sync.RWMutex
 }
 
 func (t *ThreadSafeWriter) WriteJSON(v interface{}) error {
-	t.Lock()
-	defer t.Unlock()
+	t.Mutex.Lock()
+	defer t.Mutex.Unlock()
 
 	return t.Conn.WriteJSON(v)
 }
