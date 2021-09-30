@@ -56,9 +56,11 @@ func Reader(client *Client) {
 		client.Socket.Mutex.RUnlock()
 		// Handle errors on read message, else decode the raw messsage.
 		if err != nil {
+			log.Printf("Error reading")
 			log.Printf("%+v\n", err)
 			break
 		} else if err := json.Unmarshal(raw, &message); err != nil {
+			log.Printf("Error unmarshaling")
 			log.Printf("%+v\n", err)
 		}
 		log.Printf("%+v", message)
