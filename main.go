@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 
@@ -19,7 +20,9 @@ var (
 )
 
 func main() {
+	// Clients will be registered in the nucleus. Information coming from the SFU will go through the nucleus.
 	nucleus = modules.CreateNucleus()
+	go modules.Enable(nucleus)
 	fmt.Println("Hiwave server started")
 	http.HandleFunc("/websocket", websocketHandler)
 	http.ListenAndServe(":5000", nil)
@@ -33,9 +36,10 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("handler")
+
 	// Wrap socket in a mutex that can lock the socket for write.
 	safeConn := &types.ThreadSafeWriter{unsafeConn, sync.RWMutex{}}
-	defer safeConn.Conn.Close()
 
 	// Create a new client. Give it the socket and the nucleus's phone number
 	newClient := modules.NewClient(safeConn, nucleus)
@@ -44,7 +48,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	go modules.Writer(newClient)
 
 	// Tell the nucleus who the client is.
-	// nucleus.Subscribe <- newClient
+	nucleus.Subscribe <- newClient
 
 	// Start the read loop for the newly created client in a go routine.
 	go modules.Reader(newClient)

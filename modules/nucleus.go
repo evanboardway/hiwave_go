@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"log"
 	"sync"
 
 	"github.com/google/uuid"
@@ -25,6 +26,7 @@ type Nucleus struct {
 
 // Create a nucleus and return a pointer to it.
 func CreateNucleus() *Nucleus {
+	log.Printf("New Nucleus")
 	return &Nucleus{
 		Subscribe:   make(chan *Client),
 		Unsubscribe: make(chan *Client),
@@ -33,16 +35,19 @@ func CreateNucleus() *Nucleus {
 }
 
 func Enable(nucleus *Nucleus) {
+	log.Printf("Nucleus enable")
 	for {
 		select {
 		case sub := <-nucleus.Subscribe:
 			nucleus.Mutex.Lock()
 			nucleus.Clients[sub.UUID] = sub
 			nucleus.Mutex.Unlock()
+			log.Printf("Subscribed client")
 		case unsub := <-nucleus.Unsubscribe:
 			nucleus.Mutex.Lock()
 			delete(nucleus.Clients, unsub.UUID)
 			nucleus.Mutex.Unlock()
+			log.Printf("Unsubed client")
 		}
 	}
 }
