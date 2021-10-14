@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 
@@ -36,8 +35,6 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("handler")
-
 	// Wrap socket in a mutex that can lock the socket for write.
 	safeConn := &types.ThreadSafeWriter{unsafeConn, sync.RWMutex{}}
 
@@ -52,8 +49,5 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Start the read loop for the newly created client in a go routine.
 	go modules.Reader(newClient)
-
-	// temp := types.WebsocketMessage{Event: "data", Data: map[string]interface{"test": "testing"}}
-	// newClient.ReadChan <- &temp
 
 }
