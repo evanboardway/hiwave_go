@@ -65,18 +65,22 @@ func Reader(client *Client) {
 			log.Printf("%+v\n", err)
 			break
 		} else if err := json.Unmarshal(raw, &message); err != nil {
-			log.Printf("%s", raw)
-			log.Printf("Error unmarshaling")
-			log.Printf("%+v\n", err)
+			log.Printf("Error unmarshaling: %+v", err)
 		}
 		log.Printf("New message from %s: %+v", client.UUID, message)
 
 		switch message.Event {
 		case "wrtc_connect":
 			// init peer connection and send them an offer
-			CreatePeerConnection(client)
-		case "wrtc_answer":
-			fmt.Printf("%+v\n", message.Data)
+			createPeerConnection(client)
+		case "wrtc_offer":
+			handleOffer(client, message)
+
+		case "wrtc_candidate":
+			handleIceCandidate(client, message)
+
+		case "wrtc_renegotiation":
+			// handleRenegotiation(client, message)
 		}
 	}
 }
@@ -100,7 +104,56 @@ func Writer(client *Client) {
 	}
 }
 
-func CreatePeerConnection(client *Client) {
+func handleRenegotiation(client *Client, message *types.WebsocketMessage) {
+	fmt.Println("HANDLE RENEG")
+}
+
+func handleIceCandidate(client *Client, message *types.WebsocketMessage) {
+	fmt.Printf("Candidate recvd: %+v", message)
+	candidate := webrtc.ICECandidateInit{}
+	if err := json.Unmarshal([]byte(message.Data), &candidate); err != nil {
+		fmt.Printf("%+v\n", err)
+		return
+	}
+
+	if err := client.PeerConnection.AddICECandidate(candidate); err != nil {
+		fmt.Printf("%+v\n", err)
+		return
+	}
+}
+
+func handleOffer(client *Client, message *types.WebsocketMessage) {
+
+	createPeerConnection(client)
+
+	offer := webrtc.SessionDescription{}
+	if err := json.Unmarshal([]byte(message.Data), &offer); err != nil {
+		log.Print(err)
+	}
+
+	if err := client.PeerConnection.SetRemoteDescription(offer); err != nil {
+		log.Printf("Error setting remote description: %s", err)
+	}
+
+	answer, err := client.PeerConnection.CreateAnswer(nil)
+	if err != nil {
+		log.Printf("Error creating answer: %s", err)
+	}
+
+	if err = client.PeerConnection.SetLocalDescription(answer); err != nil {
+		log.Printf("Error setting local description: %s", err)
+	}
+
+	ans, _ := json.Marshal(answer)
+
+	client.Socket.WriteJSON(&types.WebsocketMessage{
+		Event: "wrtc_answer",
+		Data:  string(ans),
+	})
+
+}
+
+func createPeerConnection(client *Client) {
 	// Configure ICE servers
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
@@ -116,6 +169,13 @@ func CreatePeerConnection(client *Client) {
 		log.Printf("%+v\n", err)
 	}
 
+	peerConnection.OnNegotiationNeeded(func() {
+		client.Socket.WriteJSON(&types.WebsocketMessage{
+			Event: "wrtc_renegotiation",
+			Data:  peerConnection.CurrentLocalDescription().SDP,
+		})
+	})
+
 	// Trickle ICE handler
 	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
@@ -128,10 +188,10 @@ func CreatePeerConnection(client *Client) {
 			return
 		}
 
-		client.WriteChan <- &types.WebsocketMessage{
+		client.Socket.WriteJSON(&types.WebsocketMessage{
 			Event: "wrtc_candidate",
 			Data:  string(candidateString),
-		}
+		})
 	})
 
 	// If the peer connection fails...
@@ -145,27 +205,8 @@ func CreatePeerConnection(client *Client) {
 		}
 	})
 
-	// Create an offer with our current config
-	offer, err := peerConnection.CreateOffer(nil)
-	if err != nil {
-		fmt.Printf("%+v\n", err)
-	}
-
-	// Set the local description.
-	if err = peerConnection.SetLocalDescription(offer); err != nil {
-		fmt.Printf("%+v\n", err)
-	}
-
-	// Convert offer to json string
-	offerString, err := json.Marshal(offer)
-	if err != nil {
-		fmt.Printf("%+v\n", err)
-	}
-
-	// Write the offer to the client.
-	client.Socket.WriteJSON(&types.WebsocketMessage{
-		Event: "wrtc_offer",
-		Data:  string(offerString),
+	peerConnection.OnDataChannel(func(dc *webrtc.DataChannel) {
+		fmt.Printf("DATA CHAN")
 	})
 
 	client.PeerConnection = peerConnection
