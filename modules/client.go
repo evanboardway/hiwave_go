@@ -67,20 +67,44 @@ func Reader(client *Client) {
 		} else if err := json.Unmarshal(raw, &message); err != nil {
 			log.Printf("Error unmarshaling: %+v", err)
 		}
-		log.Printf("New message from %s: %+v", client.UUID, message)
+		// log.Printf("New message from %s: %+v", client.UUID, message)
 
 		switch message.Event {
 		case "wrtc_connect":
 			// init peer connection and send them an offer
 			createPeerConnection(client)
+			break
 		case "wrtc_offer":
 			handleOffer(client, message)
+			break
 
 		case "wrtc_candidate":
 			handleIceCandidate(client, message)
+			break
 
 		case "wrtc_renegotiation":
-			// handleRenegotiation(client, message)
+			handleRenegotiation(client, message)
+			break
+			// case "test":
+			// 	// Example for reading from a receiver
+			// 	senders := client.PeerConnection.GetReceivers()
+			// 	rtcpBuf := make([]byte, 1500)
+			// 	for i := 0; i < 1; i++ {
+			// 		fmt.Printf("SENDERS: \n%+v\n", senders[i])
+			// 	}
+			// 	go func() {
+			// 		for {
+			// 			if _, _, rtcpErr := senders[0].Read(rtcpBuf); rtcpErr != nil {
+			// 				fmt.Println(err)
+			// 				return
+			// 			}
+			// 			fmt.Printf("%+v", rtcpBuf)
+
+			// 		}
+
+			// 	}()
+			// 	break
+
 		}
 	}
 }
@@ -105,7 +129,33 @@ func Writer(client *Client) {
 }
 
 func handleRenegotiation(client *Client, message *types.WebsocketMessage) {
-	fmt.Println("HANDLE RENEG")
+
+	offer := webrtc.SessionDescription{}
+	if err := json.Unmarshal([]byte(message.Data), &offer); err != nil {
+		log.Print(err)
+	}
+	// fmt.Printf("HANDLE RENEG \n %+v \n", offer)
+
+	if err := client.PeerConnection.SetRemoteDescription(offer); err != nil {
+		log.Printf("Error setting remote description: %s", err)
+	}
+
+	answer, err := client.PeerConnection.CreateAnswer(nil)
+	if err != nil {
+		log.Printf("Error creating answer: %s", err)
+	}
+
+	if err = client.PeerConnection.SetLocalDescription(answer); err != nil {
+		log.Printf("Error setting local description: %s", err)
+	}
+
+	ans, _ := json.Marshal(answer)
+
+	client.Socket.WriteJSON(&types.WebsocketMessage{
+		Event: "wrtc_renegotiation",
+		Data:  string(ans),
+	})
+
 }
 
 func handleIceCandidate(client *Client, message *types.WebsocketMessage) {
@@ -140,9 +190,13 @@ func handleOffer(client *Client, message *types.WebsocketMessage) {
 		log.Printf("Error creating answer: %s", err)
 	}
 
+	// gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+
 	if err = client.PeerConnection.SetLocalDescription(answer); err != nil {
 		log.Printf("Error setting local description: %s", err)
 	}
+
+	// <-gatherComplete
 
 	ans, _ := json.Marshal(answer)
 
@@ -161,6 +215,7 @@ func createPeerConnection(client *Client) {
 				URLs: []string{"stun:stun.stunprotocol.org"},
 			},
 		},
+		SDPSemantics: webrtc.SDPSemanticsPlanB,
 	}
 
 	// Create new PeerConnection
@@ -169,12 +224,23 @@ func createPeerConnection(client *Client) {
 		log.Printf("%+v\n", err)
 	}
 
-	peerConnection.OnNegotiationNeeded(func() {
-		client.Socket.WriteJSON(&types.WebsocketMessage{
-			Event: "wrtc_renegotiation",
-			Data:  peerConnection.CurrentLocalDescription().SDP,
-		})
-	})
+	// peerConnection.OnNegotiationNeeded(func() {
+	// 	log.Println("RENEG NEEDED")
+	// 	offer, err := peerConnection.CreateOffer(nil)
+	// 	if err != nil {
+	// 		log.Printf("Error renegotiating offer: %s", err)
+	// 	}
+
+	// 	off, err := json.Marshal(offer)
+	// 	if err != nil {
+	// 		log.Printf("Error marshaling renegotiation offer: %s", err)
+	// 	}
+
+	// 	client.Socket.WriteJSON(&types.WebsocketMessage{
+	// 		Event: "wrtc_renegotiation",
+	// 		Data:  string(off),
+	// 	})
+	// })
 
 	// Trickle ICE handler
 	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
@@ -206,7 +272,11 @@ func createPeerConnection(client *Client) {
 	})
 
 	peerConnection.OnDataChannel(func(dc *webrtc.DataChannel) {
-		fmt.Printf("DATA CHAN")
+		fmt.Println("DATA CHAN")
+	})
+
+	peerConnection.OnTrack(func(tr *webrtc.TrackRemote, r *webrtc.RTPReceiver) {
+		fmt.Println("ON TRACK")
 	})
 
 	client.PeerConnection = peerConnection
