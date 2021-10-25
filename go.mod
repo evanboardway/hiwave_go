@@ -8,6 +8,7 @@ require (
 	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/websocket v1.4.2
 	github.com/pion/rtcp v1.2.6 // indirect
+	github.com/pion/rtp v1.6.5 // indirect
 	github.com/pion/webrtc/v2 v2.2.26
 	github.com/pion/webrtc/v3 v3.0.31
 	github.com/rs/cors v1.8.0

@@ -36,7 +36,7 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 		UUID:         uuid.New(),
 		Socket:       safeConn,
 		WriteChan:    make(chan *types.WebsocketMessage),
-		InboundAudio: make(chan []byte),
+		InboundAudio: make(chan []byte, 1500),
 		Nucleus:      nucleus,
 	}
 }
@@ -83,7 +83,7 @@ func Reader(client *Client) {
 			handleIceCandidate(client, message)
 			break
 
-		case "mute":
+		case "voice":
 			outboundAudio, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
 			if err != nil {
 				panic(err)
@@ -101,7 +101,7 @@ func Reader(client *Client) {
 			}()
 			break
 
-		case "voice":
+		case "mute":
 			client.WriteChan <- &types.WebsocketMessage{
 				Event: "test",
 				Data:  "testing",
@@ -122,9 +122,9 @@ func Writer(client *Client) {
 	}()
 
 	for {
-		temp := <-client.WriteChan
-		log.Printf("Writing to client, %+v", temp.Event)
-		err := client.Socket.WriteJSON(temp)
+		data := <-client.WriteChan
+		log.Printf("Writing to client, %+v", data.Event)
+		err := client.Socket.Conn.WriteJSON(data)
 		if err != nil {
 			log.Printf("Write error %+v", err)
 		}
