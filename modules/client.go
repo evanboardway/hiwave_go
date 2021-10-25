@@ -24,7 +24,7 @@ type Client struct {
 	WriteChan chan *types.WebsocketMessage
 
 	// a track referencing audio packets being sent from the client.
-	InboundAudio *webrtc.TrackLocalStaticRTP
+	InboundAudio chan []byte
 
 	// a reference to the peers peer connection object.
 	PeerConnection *webrtc.PeerConnection
@@ -33,10 +33,11 @@ type Client struct {
 func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 	log.Printf("New client")
 	return &Client{
-		UUID:      uuid.New(),
-		Socket:    safeConn,
-		WriteChan: make(chan *types.WebsocketMessage, 50),
-		Nucleus:   nucleus,
+		UUID:         uuid.New(),
+		Socket:       safeConn,
+		WriteChan:    make(chan *types.WebsocketMessage),
+		InboundAudio: make(chan []byte),
+		Nucleus:      nucleus,
 	}
 }
 
@@ -67,7 +68,7 @@ func Reader(client *Client) {
 		} else if err := json.Unmarshal(raw, &message); err != nil {
 			log.Printf("Error unmarshaling: %+v", err)
 		}
-		// log.Printf("New message from %s: %+v", client.UUID, message)
+		log.Printf("New message from %s: %+v", client.UUID, message.Event)
 
 		switch message.Event {
 		case "wrtc_connect":
@@ -82,17 +83,31 @@ func Reader(client *Client) {
 			handleIceCandidate(client, message)
 			break
 
-		case "test":
-			localTracc, _ := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{}, "hi", "gp")
-			client.PeerConnection.AddTransceiverFromTrack(localTracc)
+		case "mute":
+			outboundAudio, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
+			if err != nil {
+				panic(err)
+			}
 
+			if _, err := client.PeerConnection.AddTransceiverFromTrack(outboundAudio, webrtc.RTPTransceiverInit{
+				Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
+				fmt.Println(err)
+			}
+
+			go func() {
+				for {
+					outboundAudio.Write(<-client.InboundAudio)
+				}
+			}()
+			break
+
+		case "voice":
 			client.WriteChan <- &types.WebsocketMessage{
 				Event: "test",
 				Data:  "testing",
 			}
-			break
 
-		case "wrtc_renegotiation":
+		case "wrtc_renegotiation_needed":
 			handleRenegotiation(client, message)
 			break
 		}
@@ -107,95 +122,14 @@ func Writer(client *Client) {
 	}()
 
 	for {
-		if len(client.WriteChan) > 0 {
-			temp := <-client.WriteChan
-			log.Printf("Writing to client, %+v", temp.Event)
-			err := client.Socket.WriteJSON(temp)
-			if err != nil {
-				log.Printf("Write error %+v", err)
-			}
+		temp := <-client.WriteChan
+		log.Printf("Writing to client, %+v", temp.Event)
+		err := client.Socket.WriteJSON(temp)
+		if err != nil {
+			log.Printf("Write error %+v", err)
 		}
 		// what happens if write fails?
 	}
-}
-
-func handleRenegotiation(client *Client, message *types.WebsocketMessage) {
-
-	offer := webrtc.SessionDescription{}
-	if err := json.Unmarshal([]byte(message.Data), &offer); err != nil {
-		log.Print(err)
-	}
-	// fmt.Printf("HANDLE RENEG \n %+v \n", offer)
-
-	if err := client.PeerConnection.SetRemoteDescription(offer); err != nil {
-		log.Printf("Error setting remote description: %s", err)
-	}
-
-	answer, err := client.PeerConnection.CreateAnswer(nil)
-	if err != nil {
-		log.Printf("Error creating answer: %s", err)
-	}
-
-	if err = client.PeerConnection.SetLocalDescription(answer); err != nil {
-		log.Printf("Error setting local description: %s", err)
-	}
-
-	ans, _ := json.Marshal(answer)
-
-	client.WriteChan <- &types.WebsocketMessage{
-		Event: "wrtc_renegotiation",
-		Data:  string(ans),
-	}
-
-}
-
-func handleIceCandidate(client *Client, message *types.WebsocketMessage) {
-	fmt.Printf("Candidate recvd: %+v", message)
-	candidate := webrtc.ICECandidateInit{}
-	if err := json.Unmarshal([]byte(message.Data), &candidate); err != nil {
-		fmt.Printf("%+v\n", err)
-		return
-	}
-
-	if err := client.PeerConnection.AddICECandidate(candidate); err != nil {
-		fmt.Printf("%+v\n", err)
-		return
-	}
-}
-
-func handleOffer(client *Client, message *types.WebsocketMessage) {
-
-	createPeerConnection(client)
-
-	offer := webrtc.SessionDescription{}
-	if err := json.Unmarshal([]byte(message.Data), &offer); err != nil {
-		log.Print(err)
-	}
-
-	if err := client.PeerConnection.SetRemoteDescription(offer); err != nil {
-		log.Printf("Error setting remote description: %s", err)
-	}
-
-	answer, err := client.PeerConnection.CreateAnswer(nil)
-	if err != nil {
-		log.Printf("Error creating answer: %s", err)
-	}
-
-	// gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
-
-	if err = client.PeerConnection.SetLocalDescription(answer); err != nil {
-		log.Printf("Error setting local description: %s", err)
-	}
-
-	// <-gatherComplete
-
-	ans, _ := json.Marshal(answer)
-
-	client.WriteChan <- &types.WebsocketMessage{
-		Event: "wrtc_answer",
-		Data:  string(ans),
-	}
-
 }
 
 func createPeerConnection(client *Client) {
@@ -206,7 +140,6 @@ func createPeerConnection(client *Client) {
 				URLs: []string{"stun:stun.stunprotocol.org"},
 			},
 		},
-		// SDPSemantics: webrtc.SDPSemanticsPlanB,
 	}
 
 	// Create new PeerConnection
@@ -215,24 +148,15 @@ func createPeerConnection(client *Client) {
 		log.Printf("%+v\n", err)
 	}
 
-	// Create a new TrackLocal
-	outboundAudio, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
-	if err != nil {
-		panic(err)
-	}
-
-	// peerConnection.AddTrack(outboundAudio)
-
-	if _, err := peerConnection.AddTransceiverFromTrack(outboundAudio, webrtc.RTPTransceiverInit{
-		Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
-		fmt.Println(err)
-	}
-
 	peerConnection.OnNegotiationNeeded(func() {
-		log.Println("RENEG NEEDED")
+		log.Println("PC EVENT: renegotiation needed")
 		offer, err := peerConnection.CreateOffer(nil)
 		if err != nil {
 			log.Printf("Error renegotiating offer: %s", err)
+		}
+
+		if err = client.PeerConnection.SetLocalDescription(offer); err != nil {
+			log.Printf("Error setting local description: %s", err)
 		}
 
 		off, err := json.Marshal(offer)
@@ -240,10 +164,10 @@ func createPeerConnection(client *Client) {
 			log.Printf("Error marshaling renegotiation offer: %s", err)
 		}
 
-		client.Socket.WriteJSON(&types.WebsocketMessage{
-			Event: "wrtc_renegotiation",
+		client.WriteChan <- &types.WebsocketMessage{
+			Event: "wrtc_renegotiation_needed",
 			Data:  string(off),
-		})
+		}
 	})
 
 	// Trickle ICE handler
@@ -289,12 +213,72 @@ func createPeerConnection(client *Client) {
 				return
 			}
 
-			if _, err = outboundAudio.Write(buff[:i]); err != nil {
-				return
-			}
+			client.InboundAudio <- buff[:i]
+
+			// if _, err = .Write(buff[:i]); err != nil {
+			// 	return
+			// }
 		}
 	})
 
 	client.PeerConnection = peerConnection
+}
+
+func handleRenegotiation(client *Client, message *types.WebsocketMessage) {
+
+	remoteOffer := webrtc.SessionDescription{}
+	if err := json.Unmarshal([]byte(message.Data), &remoteOffer); err != nil {
+		log.Print(err)
+	}
+	// fmt.Printf("HANDLE RENEG \n %+v \n", remoteOffer)
+
+	if err := client.PeerConnection.SetRemoteDescription(remoteOffer); err != nil {
+		log.Printf("Error setting remote description: %s", err)
+	}
+
+}
+
+func handleIceCandidate(client *Client, message *types.WebsocketMessage) {
+	fmt.Printf("Candidate recvd: %+v", message)
+	candidate := webrtc.ICECandidateInit{}
+	if err := json.Unmarshal([]byte(message.Data), &candidate); err != nil {
+		fmt.Printf("%+v\n", err)
+		return
+	}
+
+	if err := client.PeerConnection.AddICECandidate(candidate); err != nil {
+		fmt.Printf("%+v\n", err)
+		return
+	}
+}
+
+func handleOffer(client *Client, message *types.WebsocketMessage) {
+
+	createPeerConnection(client)
+
+	offer := webrtc.SessionDescription{}
+	if err := json.Unmarshal([]byte(message.Data), &offer); err != nil {
+		log.Print(err)
+	}
+
+	if err := client.PeerConnection.SetRemoteDescription(offer); err != nil {
+		log.Printf("Error setting remote description: %s", err)
+	}
+
+	answer, err := client.PeerConnection.CreateAnswer(nil)
+	if err != nil {
+		log.Printf("Error creating answer: %s", err)
+	}
+
+	if err = client.PeerConnection.SetLocalDescription(answer); err != nil {
+		log.Printf("Error setting local description: %s", err)
+	}
+
+	ans, _ := json.Marshal(answer)
+
+	client.WriteChan <- &types.WebsocketMessage{
+		Event: "wrtc_answer",
+		Data:  string(ans),
+	}
 
 }
