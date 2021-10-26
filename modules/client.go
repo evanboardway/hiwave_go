@@ -192,7 +192,13 @@ func createPeerConnection(client *Client) {
 	}()
 
 	peerConnection.OnNegotiationNeeded(func() {
-		log.Println("PC EVENT: renegotiation needed")
+		log.Printf("PC EVENT: renegotiation needed, %s \n", peerConnection.SignalingState())
+
+		if peerConnection.SignalingState() != webrtc.SignalingStateStable {
+			log.Println("Blocked renegotiation due to pending offer")
+			return
+		}
+
 		offer, err := peerConnection.CreateOffer(nil)
 		if err != nil {
 			log.Printf("Error renegotiating offer: %s", err)
@@ -276,7 +282,13 @@ func handleRenegotiation(client *Client, message *types.WebsocketMessage) {
 	if err := json.Unmarshal([]byte(message.Data), &remoteOffer); err != nil {
 		log.Print(err)
 	}
-	// fmt.Printf("HANDLE RENEG \n %+v \n", remoteOffer)
+
+	if client.PeerConnection.SignalingState() != webrtc.SignalingStateStable {
+		client.PeerConnection.SetLocalDescription(webrtc.SessionDescription{
+			Type: webrtc.SDPTypeRollback,
+		})
+		client.PeerConnection.SetRemoteDescription(remoteOffer)
+	}
 
 	if err := client.PeerConnection.SetRemoteDescription(remoteOffer); err != nil {
 		log.Printf("Error setting remote description: %s", err)
