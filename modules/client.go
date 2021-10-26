@@ -26,18 +26,22 @@ type Client struct {
 	// a track referencing audio packets being sent from the client.
 	InboundAudio chan []byte
 
+	OutboundAudio chan []byte
+
 	// a reference to the peers peer connection object.
 	PeerConnection *webrtc.PeerConnection
 }
 
 func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 	log.Printf("New client")
+
 	return &Client{
-		UUID:         uuid.New(),
-		Socket:       safeConn,
-		WriteChan:    make(chan *types.WebsocketMessage),
-		InboundAudio: make(chan []byte, 1500),
-		Nucleus:      nucleus,
+		UUID:          uuid.New(),
+		Socket:        safeConn,
+		WriteChan:     make(chan *types.WebsocketMessage),
+		InboundAudio:  make(chan []byte, 1500),
+		OutboundAudio: make(chan []byte, 1500),
+		Nucleus:       nucleus,
 	}
 }
 
@@ -84,21 +88,29 @@ func Reader(client *Client) {
 			break
 
 		case "voice":
-			outboundAudio, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
-			if err != nil {
-				panic(err)
-			}
+			// newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
+			// if err != nil {
+			// 	log.Println(err)
+			// }
 
-			if _, err := client.PeerConnection.AddTransceiverFromTrack(outboundAudio, webrtc.RTPTransceiverInit{
-				Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
-				fmt.Println(err)
-			}
+			// // if _, err := client.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
+			// // 	Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
+			// // 	log.Println(err)
+			// // }
 
-			go func() {
-				for {
-					outboundAudio.Write(<-client.InboundAudio)
-				}
-			}()
+			// client.PeerConnection.AddTrack(newTrack)
+
+			// // Error in the renegotiation process. Figure that out.
+			// go func() {
+			// 	for {
+			// 		// newTrack.Write(<-client.InboundAudio)
+			// 		temp := <-client.InboundAudio
+			// 		client.OutboundAudio <- temp
+			// 	}
+			// }()
+
+			LocateAndConnect(client)
+
 			break
 
 		case "mute":
@@ -106,6 +118,7 @@ func Reader(client *Client) {
 				Event: "test",
 				Data:  "testing",
 			}
+			break
 
 		case "wrtc_renegotiation_needed":
 			handleRenegotiation(client, message)
@@ -132,6 +145,19 @@ func Writer(client *Client) {
 	}
 }
 
+func LocateAndConnect(client *Client) {
+
+	for _, member := range client.Nucleus.Clients {
+		if client.UUID != member.UUID {
+			log.Printf("Client %s sending audio to member %s\n", client.UUID, member.UUID)
+			go func() {
+				temp := <-client.InboundAudio
+				member.OutboundAudio <- temp
+			}()
+		}
+	}
+}
+
 func createPeerConnection(client *Client) {
 	// Configure ICE servers
 	config := webrtc.Configuration{
@@ -147,6 +173,23 @@ func createPeerConnection(client *Client) {
 	if err != nil {
 		log.Printf("%+v\n", err)
 	}
+
+	newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
+	if err != nil {
+		log.Println(err)
+	}
+
+	if _, err := peerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
+		log.Println(err)
+	}
+
+	// Error in the renegotiation process. Figure that out.
+	go func() {
+		for {
+			newTrack.Write(<-client.OutboundAudio)
+		}
+	}()
 
 	peerConnection.OnNegotiationNeeded(func() {
 		log.Println("PC EVENT: renegotiation needed")
@@ -193,8 +236,11 @@ func createPeerConnection(client *Client) {
 		log.Printf("Connection State has changed to %s \n", connectionState.String())
 
 		if connectionState == webrtc.ICEConnectionStateFailed {
+			client.WriteChan <- &types.WebsocketMessage{
+				Event: "wrtc_failed",
+			}
 			if closeErr := peerConnection.Close(); closeErr != nil {
-				log.Println(closeErr)
+				log.Printf("Close err %s", closeErr)
 			}
 		}
 	})
@@ -215,7 +261,7 @@ func createPeerConnection(client *Client) {
 
 			client.InboundAudio <- buff[:i]
 
-			// if _, err = .Write(buff[:i]); err != nil {
+			// if _, err = client.InboundAudio.Write(buff[:i]); err != nil {
 			// 	return
 			// }
 		}
