@@ -44,10 +44,10 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	// Start the write loop for the newly created client in a go routine.
 	go modules.Writer(newClient)
 
-	// Tell the nucleus who the client is.
-	nucleus.Subscribe <- newClient
-
 	// Start the read loop for the newly created client in a go routine.
 	go modules.Reader(newClient)
+
+	// Tell the nucleus who the client is.
+	nucleus.Subscribe <- newClient
 
 }
