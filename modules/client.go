@@ -83,33 +83,40 @@ func Reader(client *Client) {
 			handleOffer(client, message)
 			break
 
+		case "wrtc_answer":
+			handleAnswer(client, message)
+			break
+
 		case "wrtc_candidate":
 			handleIceCandidate(client, message)
 			break
 
 		case "voice":
-			// newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
-			// if err != nil {
-			// 	log.Println(err)
-			// }
+			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
+			if err != nil {
+				log.Println(err)
+			}
 
-			// // if _, err := client.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
-			// // 	Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
-			// // 	log.Println(err)
-			// // }
+			if _, err := client.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
+				Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
+				log.Println(err)
+			}
 
-			// client.PeerConnection.AddTrack(newTrack)
+			go func() {
+				for {
+					newTrack.Write(<-client.OutboundAudio)
+				}
+			}()
 
-			// // Error in the renegotiation process. Figure that out.
-			// go func() {
-			// 	for {
-			// 		// newTrack.Write(<-client.InboundAudio)
-			// 		temp := <-client.InboundAudio
-			// 		client.OutboundAudio <- temp
-			// 	}
-			// }()
+			// Error in the renegotiation process. Figure that out.
+			go func() {
+				for {
+					temp := <-client.InboundAudio
+					client.OutboundAudio <- temp
+				}
+			}()
 
-			LocateAndConnect(client)
+			// LocateAndConnect(client)
 
 			break
 
@@ -174,22 +181,32 @@ func createPeerConnection(client *Client) {
 		log.Printf("%+v\n", err)
 	}
 
-	newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
-	if err != nil {
-		log.Println(err)
-	}
+	// newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
+	// if err != nil {
+	// 	log.Println(err)
+	// }
 
-	if _, err := peerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
-		Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
-		log.Println(err)
-	}
+	// if _, err := peerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
+	// 	Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
+	// 	log.Println(err)
+	// }
+
+	// go func() {
+	// 	for {
+
+	// 		newTrack.Write(<-client.OutboundAudio)
+	// 	}
+	// }()
 
 	// Error in the renegotiation process. Figure that out.
-	go func() {
-		for {
-			newTrack.Write(<-client.OutboundAudio)
-		}
-	}()
+	// go func() {
+	// 	for {
+	// 		// newTrack.Write(<-client.OutboundAudio)
+	// 		temp := <-client.InboundAudio
+	// 		client.OutboundAudio <- temp
+
+	// 	}
+	// }()
 
 	peerConnection.OnNegotiationNeeded(func() {
 		log.Printf("PC EVENT: renegotiation needed, %s \n", peerConnection.SignalingState())
@@ -294,6 +311,22 @@ func handleRenegotiation(client *Client, message *types.WebsocketMessage) {
 		log.Printf("Error setting remote description: %s", err)
 	}
 
+	answer, err := client.PeerConnection.CreateAnswer(nil)
+	if err != nil {
+		log.Printf("Error creating renegotiation answer %s", err)
+	}
+
+	if err = client.PeerConnection.SetLocalDescription(answer); err != nil {
+		log.Printf("Error setting local description: %s", err)
+	}
+
+	ans, _ := json.Marshal(answer)
+
+	client.WriteChan <- &types.WebsocketMessage{
+		Event: "wrtc_answer",
+		Data:  string(ans),
+	}
+
 }
 
 func handleIceCandidate(client *Client, message *types.WebsocketMessage) {
@@ -337,6 +370,18 @@ func handleOffer(client *Client, message *types.WebsocketMessage) {
 	client.WriteChan <- &types.WebsocketMessage{
 		Event: "wrtc_answer",
 		Data:  string(ans),
+	}
+
+}
+
+func handleAnswer(client *Client, message *types.WebsocketMessage) {
+	answer := webrtc.SessionDescription{}
+	if err := json.Unmarshal([]byte(message.Data), &answer); err != nil {
+		log.Print(err)
+	}
+
+	if err := client.PeerConnection.SetRemoteDescription(answer); err != nil {
+		log.Printf("Error setting remote description: %s", err)
 	}
 
 }
