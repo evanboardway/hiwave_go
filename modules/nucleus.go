@@ -42,7 +42,6 @@ func Enable(nucleus *Nucleus) {
 		case sub := <-nucleus.Subscribe:
 			nucleus.Mutex.Lock()
 			nucleus.Clients[sub.UUID] = sub
-			log.Printf("Length of client list %d", len(nucleus.Clients))
 			nucleus.Mutex.Unlock()
 			log.Printf("Subscribed client")
 		case unsub := <-nucleus.Unsubscribe:
@@ -54,6 +53,7 @@ func Enable(nucleus *Nucleus) {
 	}
 }
 
+// Register and unregister clients to eachothers audio streams based on location data.
 func LocateAndConnect(nucleus *Nucleus) {
 	for {
 		if len(nucleus.Clients) == 2 {

@@ -47,6 +47,12 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	// Start the read loop for the newly created client in a go routine.
 	go modules.Reader(newClient)
 
+	// Start the registration process for clients to subscribe to their audio tracks.
+	go modules.Registration(newClient)
+
+	// Send incoming audio packets to all clients registered to this client.
+	go modules.RouteAudioToClients(newClient)
+
 	// Tell the nucleus who the client is.
 	nucleus.Subscribe <- newClient
 
