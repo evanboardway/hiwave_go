@@ -36,11 +36,13 @@ func CreateNucleus() *Nucleus {
 
 func Enable(nucleus *Nucleus) {
 	log.Printf("Nucleus enable")
+	go LocateAndConnect(nucleus)
 	for {
 		select {
 		case sub := <-nucleus.Subscribe:
 			nucleus.Mutex.Lock()
 			nucleus.Clients[sub.UUID] = sub
+			log.Printf("Length of client list %d", len(nucleus.Clients))
 			nucleus.Mutex.Unlock()
 			log.Printf("Subscribed client")
 		case unsub := <-nucleus.Unsubscribe:
@@ -48,6 +50,17 @@ func Enable(nucleus *Nucleus) {
 			delete(nucleus.Clients, unsub.UUID)
 			nucleus.Mutex.Unlock()
 			log.Printf("Unsubed client")
+		}
+	}
+}
+
+func LocateAndConnect(nucleus *Nucleus) {
+	for {
+		if len(nucleus.Clients) == 2 {
+			for _, member := range nucleus.Clients {
+				log.Printf("%+v", member)
+			}
+			return
 		}
 	}
 }

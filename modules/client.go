@@ -26,6 +26,7 @@ type Client struct {
 	// a track referencing audio packets being sent from the client.
 	InboundAudio chan []byte
 
+	// Audio packets written to here
 	OutboundAudio chan []byte
 
 	// a reference to the peers peer connection object.
@@ -76,9 +77,9 @@ func Reader(client *Client) {
 
 		switch message.Event {
 		case "wrtc_connect":
-			// init peer connection and send them an offer
 			createPeerConnection(client)
 			break
+
 		case "wrtc_offer":
 			handleOffer(client, message)
 			break
@@ -92,32 +93,7 @@ func Reader(client *Client) {
 			break
 
 		case "voice":
-			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
-			if err != nil {
-				log.Println(err)
-			}
-
-			if _, err := client.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
-				Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
-				log.Println(err)
-			}
-
-			go func() {
-				for {
-					newTrack.Write(<-client.OutboundAudio)
-				}
-			}()
-
-			// Error in the renegotiation process. Figure that out.
-			go func() {
-				for {
-					temp := <-client.InboundAudio
-					client.OutboundAudio <- temp
-				}
-			}()
-
-			// LocateAndConnect(client)
-
+			RouteAudioToClient(client, client)
 			break
 
 		case "mute":
@@ -134,7 +110,7 @@ func Reader(client *Client) {
 	}
 }
 
-// read and write to socket asynchronously
+// Write to socket synchronously (unbuffered chan)
 func Writer(client *Client) {
 	defer func() {
 		client.Socket.Conn.Close()
@@ -152,17 +128,30 @@ func Writer(client *Client) {
 	}
 }
 
-func LocateAndConnect(client *Client) {
-
-	for _, member := range client.Nucleus.Clients {
-		if client.UUID != member.UUID {
-			log.Printf("Client %s sending audio to member %s\n", client.UUID, member.UUID)
-			go func() {
-				temp := <-client.InboundAudio
-				member.OutboundAudio <- temp
-			}()
-		}
+func RouteAudioToClient(from *Client, to *Client) {
+	newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
+	if err != nil {
+		log.Println(err)
 	}
+
+	if _, err := to.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionSendonly}); err != nil {
+		log.Println(err)
+	}
+
+	// go func() {
+	// 	for {
+	// 		newTrack.Write(<-to.OutboundAudio)
+	// 	}
+	// }()
+
+	go func() {
+		for {
+			// temp := <-from.InboundAudio
+			// to.OutboundAudio <- temp
+			newTrack.Write(<-from.InboundAudio)
+		}
+	}()
 }
 
 func createPeerConnection(client *Client) {
@@ -180,33 +169,6 @@ func createPeerConnection(client *Client) {
 	if err != nil {
 		log.Printf("%+v\n", err)
 	}
-
-	// newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
-	// if err != nil {
-	// 	log.Println(err)
-	// }
-
-	// if _, err := peerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
-	// 	Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
-	// 	log.Println(err)
-	// }
-
-	// go func() {
-	// 	for {
-
-	// 		newTrack.Write(<-client.OutboundAudio)
-	// 	}
-	// }()
-
-	// Error in the renegotiation process. Figure that out.
-	// go func() {
-	// 	for {
-	// 		// newTrack.Write(<-client.OutboundAudio)
-	// 		temp := <-client.InboundAudio
-	// 		client.OutboundAudio <- temp
-
-	// 	}
-	// }()
 
 	peerConnection.OnNegotiationNeeded(func() {
 		log.Printf("PC EVENT: renegotiation needed, %s \n", peerConnection.SignalingState())
