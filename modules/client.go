@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/evanboardway/hiwave_go/types"
 	"github.com/google/uuid"
@@ -11,37 +12,49 @@ import (
 )
 
 type Client struct {
-	// a pointer to the nucleus so that we can access its channels.
-	Nucleus *Nucleus
-
 	// The identifier that the client is stored as in the Nucleus.
 	UUID uuid.UUID
 
-	// websocket connection
+	// a pointer to the nucleus so that we can access its channels.
+	Nucleus *Nucleus
+
+	// Websocket connection
 	Socket *types.ThreadSafeWriter
 
-	// a channel whose data is written to the websocket.
+	// A channel whose data is written to the websocket.
 	WriteChan chan *types.WebsocketMessage
 
-	// a track referencing audio packets being sent from the client.
+	// A channel for registering clients to their audio stream.
+	Register chan *Client
+
+	// A channel for unregistering clients to their audio stream.
+	Unregister chan *Client
+
+	// A track referencing audio packets being sent from the client.
 	InboundAudio chan []byte
 
-	OutboundAudio chan []byte
+	// A map of client uuid (key) to outbound audio tracks (value).
+	RegisteredClients map[uuid.UUID]*webrtc.TrackLocalStaticRTP
 
-	// a reference to the peers peer connection object.
+	// A reference to the peers peer connection object.
 	PeerConnection *webrtc.PeerConnection
+
+	// A mutex to lock a client so that only one resource can modify its peer connection at a time.
+	Mutex sync.Mutex
 }
 
 func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 	log.Printf("New client")
 
 	return &Client{
-		UUID:          uuid.New(),
-		Socket:        safeConn,
-		WriteChan:     make(chan *types.WebsocketMessage),
-		InboundAudio:  make(chan []byte, 1500),
-		OutboundAudio: make(chan []byte, 1500),
-		Nucleus:       nucleus,
+		UUID:              uuid.New(),
+		Nucleus:           nucleus,
+		Socket:            safeConn,
+		WriteChan:         make(chan *types.WebsocketMessage),
+		Register:          make(chan *Client),
+		Unregister:        make(chan *Client),
+		RegisteredClients: make(map[uuid.UUID]*webrtc.TrackLocalStaticRTP),
+		InboundAudio:      make(chan []byte, 1500),
 	}
 }
 
@@ -76,9 +89,9 @@ func Reader(client *Client) {
 
 		switch message.Event {
 		case "wrtc_connect":
-			// init peer connection and send them an offer
 			createPeerConnection(client)
 			break
+
 		case "wrtc_offer":
 			handleOffer(client, message)
 			break
@@ -92,32 +105,12 @@ func Reader(client *Client) {
 			break
 
 		case "voice":
-			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
-			if err != nil {
-				log.Println(err)
-			}
-
-			if _, err := client.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
-				Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
-				log.Println(err)
-			}
-
-			go func() {
-				for {
-					newTrack.Write(<-client.OutboundAudio)
+			// RouteAudioToClients(client, client)
+			for uuid, member := range client.Nucleus.Clients {
+				if uuid != client.UUID {
+					member.Register <- client
 				}
-			}()
-
-			// Error in the renegotiation process. Figure that out.
-			go func() {
-				for {
-					temp := <-client.InboundAudio
-					client.OutboundAudio <- temp
-				}
-			}()
-
-			// LocateAndConnect(client)
-
+			}
 			break
 
 		case "mute":
@@ -134,7 +127,7 @@ func Reader(client *Client) {
 	}
 }
 
-// read and write to socket asynchronously
+// Write to socket synchronously (unbuffered chan)
 func Writer(client *Client) {
 	defer func() {
 		client.Socket.Conn.Close()
@@ -152,15 +145,37 @@ func Writer(client *Client) {
 	}
 }
 
-func LocateAndConnect(client *Client) {
+func Registration(client *Client) {
+	for {
+		// select statement in golang is nonblocking to the channel.
+		select {
+		case registree := <-client.Register:
+			// add track to client, add track to global list of senders.
+			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", registree.UUID.String())
+			if err != nil {
+				log.Println(err)
+			}
 
-	for _, member := range client.Nucleus.Clients {
-		if client.UUID != member.UUID {
-			log.Printf("Client %s sending audio to member %s\n", client.UUID, member.UUID)
-			go func() {
-				temp := <-client.InboundAudio
-				member.OutboundAudio <- temp
-			}()
+			if _, err := registree.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
+				Direction: webrtc.RTPTransceiverDirectionSendonly}); err != nil {
+				log.Println(err)
+			}
+
+			client.RegisteredClients[registree.UUID] = newTrack
+			break
+		case unregistree := <-client.Unregister:
+			// unregistree.PeerConnection.RemoveTrack()
+			delete(client.RegisteredClients, unregistree.UUID)
+			break
+		}
+	}
+}
+
+func RouteAudioToClients(client *Client) {
+	for {
+		packet := <-client.InboundAudio
+		for _, registreeTrack := range client.RegisteredClients {
+			registreeTrack.Write(packet)
 		}
 	}
 }
@@ -180,33 +195,6 @@ func createPeerConnection(client *Client) {
 	if err != nil {
 		log.Printf("%+v\n", err)
 	}
-
-	// newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "hiwave_go")
-	// if err != nil {
-	// 	log.Println(err)
-	// }
-
-	// if _, err := peerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
-	// 	Direction: webrtc.RTPTransceiverDirectionSendrecv}); err != nil {
-	// 	log.Println(err)
-	// }
-
-	// go func() {
-	// 	for {
-
-	// 		newTrack.Write(<-client.OutboundAudio)
-	// 	}
-	// }()
-
-	// Error in the renegotiation process. Figure that out.
-	// go func() {
-	// 	for {
-	// 		// newTrack.Write(<-client.OutboundAudio)
-	// 		temp := <-client.InboundAudio
-	// 		client.OutboundAudio <- temp
-
-	// 	}
-	// }()
 
 	peerConnection.OnNegotiationNeeded(func() {
 		log.Printf("PC EVENT: renegotiation needed, %s \n", peerConnection.SignalingState())
