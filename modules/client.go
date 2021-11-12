@@ -39,6 +39,9 @@ type Client struct {
 	// A reference to the peers peer connection object.
 	PeerConnection *webrtc.PeerConnection
 
+	// The clients current location
+	CurrentLocation chan *types.LocationData
+
 	// A mutex to lock a client so that only one resource can modify its peer connection at a time.
 	Mutex sync.Mutex
 }
@@ -123,7 +126,12 @@ func Reader(client *Client) {
 		case "wrtc_renegotiation_needed":
 			handleRenegotiation(client, message)
 			break
+
+		case "update_location":
+			updateClientLocation(client, message)
+			break
 		}
+
 	}
 }
 
@@ -178,6 +186,16 @@ func RouteAudioToClients(client *Client) {
 			registreeTrack.Write(packet)
 		}
 	}
+}
+
+func updateClientLocation(client *Client, message *types.WebsocketMessage) {
+
+	location := &types.LocationData{}
+	if err := json.Unmarshal([]byte(message.Data), &location); err != nil {
+		log.Print(err)
+	}
+	log.Printf("%+v\n", location)
+	client.CurrentLocation <- location
 }
 
 func createPeerConnection(client *Client) {
