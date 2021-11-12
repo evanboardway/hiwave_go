@@ -43,7 +43,9 @@ type Client struct {
 	CurrentLocation chan *types.LocationData
 
 	// A mutex to lock a client so that only one resource can modify its peer connection at a time.
-	Mutex sync.Mutex
+	PCMutex sync.Mutex
+
+	// A mutex to lock the current location
 }
 
 func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {

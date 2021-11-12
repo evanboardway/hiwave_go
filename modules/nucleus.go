@@ -43,6 +43,7 @@ func CreateNucleus() *Nucleus {
 
 func Enable(nucleus *Nucleus) {
 	log.Printf("Nucleus enable")
+	go LocateAndConnect(nucleus)
 	for {
 		select {
 		case sub := <-nucleus.Subscribe:
@@ -62,6 +63,7 @@ func Enable(nucleus *Nucleus) {
 // Register and unregister clients to eachothers audio streams based on location data.
 func LocateAndConnect(nucleus *Nucleus) {
 	for {
+		nucleus.Mutex.Lock()
 		for uuid, member := range nucleus.Clients {
 			for peer_uuid, peer := range nucleus.Clients {
 				// Check that peer and member are different clients and
@@ -82,6 +84,7 @@ func LocateAndConnect(nucleus *Nucleus) {
 				}
 			}
 		}
+		nucleus.Mutex.Unlock()
 	}
 }
 
