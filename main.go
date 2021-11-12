@@ -22,6 +22,7 @@ func main() {
 	// Clients will be registered in the nucleus. Information coming from the SFU will go through the nucleus.
 	nucleus = modules.CreateNucleus()
 	go modules.Enable(nucleus)
+	go modules.LocateAndConnect(nucleus)
 	fmt.Println("Hiwave server started")
 	http.HandleFunc("/websocket", websocketHandler)
 	http.ListenAndServe(":5000", nil)

@@ -1,11 +1,11 @@
 package types
 
 type LocationData struct {
-	Altitude         float32
-	AltitudeAccuracy float32
-	Latitude         float32
-	Accuracy         float32
-	Longitude        float32
-	Heading          float32
-	Speed            float32
+	Altitude         float64
+	AltitudeAccuracy float64
+	Latitude         float64
+	Accuracy         float64
+	Longitude        float64
+	Heading          float64
+	Speed            float64
 }

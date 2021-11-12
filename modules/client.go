@@ -34,7 +34,7 @@ type Client struct {
 	InboundAudio chan []byte
 
 	// A map of client uuid (key) to outbound audio tracks (value).
-	RegisteredClients map[uuid.UUID]*webrtc.TrackLocalStaticRTP
+	RegisteredClients map[uuid.UUID]*types.AudioBundle
 
 	// A reference to the peers peer connection object.
 	PeerConnection *webrtc.PeerConnection
@@ -56,7 +56,8 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 		WriteChan:         make(chan *types.WebsocketMessage),
 		Register:          make(chan *Client),
 		Unregister:        make(chan *Client),
-		RegisteredClients: make(map[uuid.UUID]*webrtc.TrackLocalStaticRTP),
+		RegisteredClients: make(map[uuid.UUID]*types.AudioBundle),
+		CurrentLocation:   make(chan *types.LocationData),
 		InboundAudio:      make(chan []byte, 1500),
 	}
 }
@@ -109,14 +110,15 @@ func Reader(client *Client) {
 
 		case "voice":
 			// RouteAudioToClients(client, client)
-			for uuid, member := range client.Nucleus.Clients {
-				if uuid != client.UUID {
-					member.Register <- client
-				}
+			for _, member := range client.Nucleus.Clients {
+				member.Register <- client
 			}
 			break
 
 		case "mute":
+			for _, member := range client.Nucleus.Clients {
+				member.Unregister <- client
+			}
 			client.WriteChan <- &types.WebsocketMessage{
 				Event: "test",
 				Data:  "testing",
@@ -164,15 +166,24 @@ func Registration(client *Client) {
 				log.Println(err)
 			}
 
-			if _, err := registree.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
-				Direction: webrtc.RTPTransceiverDirectionSendonly}); err != nil {
+			transceiver, err := registree.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
+				Direction: webrtc.RTPTransceiverDirectionSendonly})
+			if err != nil {
 				log.Println(err)
 			}
 
-			client.RegisteredClients[registree.UUID] = newTrack
+			bundle := *&types.AudioBundle{
+				Transceiver: transceiver,
+				Track:       newTrack,
+			}
+
+			client.RegisteredClients[registree.UUID] = &bundle
 			break
 		case unregistree := <-client.Unregister:
-			// unregistree.PeerConnection.RemoveTrack()
+			// Peer connection needs to be in a stable state, lock the client mutex.
+			clientBundle := client.RegisteredClients[unregistree.UUID]
+			unregistree.PeerConnection.RemoveTrack(clientBundle.Transceiver.Sender())
+			clientBundle.Transceiver.Stop()
 			delete(client.RegisteredClients, unregistree.UUID)
 			break
 		}
@@ -182,8 +193,8 @@ func Registration(client *Client) {
 func RouteAudioToClients(client *Client) {
 	for {
 		packet := <-client.InboundAudio
-		for _, registreeTrack := range client.RegisteredClients {
-			registreeTrack.Write(packet)
+		for _, registreeBundle := range client.RegisteredClients {
+			registreeBundle.Track.Write(packet)
 		}
 	}
 }
@@ -290,9 +301,6 @@ func createPeerConnection(client *Client) {
 
 			client.InboundAudio <- buff[:i]
 
-			// if _, err = client.InboundAudio.Write(buff[:i]); err != nil {
-			// 	return
-			// }
 		}
 	})
 
