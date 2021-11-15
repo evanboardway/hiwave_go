@@ -45,7 +45,8 @@ type Client struct {
 	// A mutex to lock a client so that only one resource can modify its peer connection at a time.
 	PCMutex sync.Mutex
 
-	// A mutex to lock the current location
+	// A mutex to lock the registered clients list
+	RCMutex sync.RWMutex
 }
 
 func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
@@ -90,7 +91,10 @@ func Reader(client *Client) {
 		} else if err := json.Unmarshal(raw, &message); err != nil {
 			log.Printf("Error unmarshaling: %+v", err)
 		}
-		log.Printf("New message from %s: %+v", client.UUID, message.Event)
+
+		if message.Event != "update_location" {
+			log.Printf("New message from %s: %+v", client.UUID, message.Event)
+		}
 
 		switch message.Event {
 		case "wrtc_connect":
@@ -99,6 +103,10 @@ func Reader(client *Client) {
 
 		case "wrtc_offer":
 			handleOffer(client, message)
+			break
+
+		case "wrtc_disconnect":
+			handleDisconnect(client)
 			break
 
 		case "wrtc_answer":
@@ -168,7 +176,7 @@ func Registration(client *Client) {
 		select {
 		case registree := <-client.Register:
 			// add track to client, add track to global list of senders.
-			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", registree.UUID.String())
+			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", client.UUID.String())
 			if err != nil {
 				log.Println(err)
 			}
@@ -179,19 +187,25 @@ func Registration(client *Client) {
 				log.Println(err)
 			}
 
-			bundle := *&types.AudioBundle{
+			bundle := &types.AudioBundle{
 				Transceiver: transceiver,
 				Track:       newTrack,
 			}
 
-			client.RegisteredClients[registree.UUID] = &bundle
+			client.RCMutex.Lock()
+			client.RegisteredClients[registree.UUID] = bundle
+			client.RCMutex.Unlock()
 			break
 		case unregistree := <-client.Unregister:
 			// Peer connection needs to be in a stable state, lock the client mutex.
-			clientBundle := client.RegisteredClients[unregistree.UUID]
-			unregistree.PeerConnection.RemoveTrack(clientBundle.Transceiver.Sender())
-			clientBundle.Transceiver.Stop()
+			// unregistreeBundle := client.RegisteredClients[unregistree.UUID]
+			// if err := unregistree.PeerConnection.RemoveTrack(unregistreeBundle.Transceiver.Sender()); err != nil {
+			// 	log.Printf("Error removing track on unregistree peer connection %s\n", err)
+			// }
+			// unregistreeBundle.Transceiver.Stop()
+			client.RCMutex.Lock()
 			delete(client.RegisteredClients, unregistree.UUID)
+			client.RCMutex.Unlock()
 			break
 		}
 	}
@@ -307,15 +321,20 @@ func createPeerConnection(client *Client) {
 			if err != nil {
 				return
 			}
-
 			client.InboundAudio <- buff[:i]
-
 		}
 	})
 
 	client.PCMutex.Lock()
 	client.PeerConnection = peerConnection
 	client.PCMutex.Unlock()
+}
+
+func handleDisconnect(client *Client) {
+	if client.PeerConnection != nil {
+		client.PeerConnection.Close()
+		client.PeerConnection = nil
+	}
 }
 
 func handleRenegotiation(client *Client, message *types.WebsocketMessage) {

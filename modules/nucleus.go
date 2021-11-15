@@ -80,8 +80,10 @@ func LocateAndConnect(nucleus *Nucleus) {
 				// check that they arent already registered to eachother.
 				if member_uuid != peer_uuid {
 					calculated_distance := calculateDistanceBetweenPeers(member.CurrentLocation, peer.CurrentLocation)
-
-					if registered := member.RegisteredClients[peer_uuid]; registered != nil {
+					member.RCMutex.RLock()
+					registered := member.RegisteredClients[peer_uuid]
+					member.RCMutex.RUnlock()
+					if registered != nil {
 						if calculated_distance > ONE_THIRD_MILE {
 							member.WriteChan <- &types.WebsocketMessage{
 								Event: "peer",
@@ -94,6 +96,7 @@ func LocateAndConnect(nucleus *Nucleus) {
 							member.Unregister <- peer
 							peer.Unregister <- member
 							delete(filtered_clients, peer_uuid)
+
 						}
 					} else if calculated_distance <= ONE_THIRD_MILE {
 						member.WriteChan <- &types.WebsocketMessage{
@@ -106,6 +109,7 @@ func LocateAndConnect(nucleus *Nucleus) {
 						}
 						member.Register <- peer
 						peer.Register <- member
+						delete(filtered_clients, peer_uuid)
 					}
 				}
 			}
