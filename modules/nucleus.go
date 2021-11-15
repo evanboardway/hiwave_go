@@ -2,9 +2,16 @@ package modules
 
 import (
 	"log"
+	"math"
 	"sync"
 
+	"github.com/evanboardway/hiwave_go/types"
 	"github.com/google/uuid"
+)
+
+var (
+	// 1/3 mile in terms of geographical coordinates
+	ONE_THIRD_MILE = 0.00483091787
 )
 
 // The nucleus is the place where each client is stored.
@@ -56,11 +63,60 @@ func Enable(nucleus *Nucleus) {
 // Register and unregister clients to eachothers audio streams based on location data.
 func LocateAndConnect(nucleus *Nucleus) {
 	for {
-		if len(nucleus.Clients) == 2 {
-			for _, member := range nucleus.Clients {
-				log.Printf("%+v", member)
+		nucleus.Mutex.Lock()
+		filtered_clients := make(map[uuid.UUID]*Client)
+		for _, peer := range nucleus.Clients {
+			peer.PCMutex.Lock()
+			if peer.PeerConnection != nil {
+				filtered_clients[peer.UUID] = peer
 			}
-			return
+			peer.PCMutex.Unlock()
+		}
+		nucleus.Mutex.Unlock()
+
+		for member_uuid, member := range filtered_clients {
+			for peer_uuid, peer := range filtered_clients {
+				// Check that peer and member are different clients and
+				// check that they arent already registered to eachother.
+				if member_uuid != peer_uuid {
+					calculated_distance := calculateDistanceBetweenPeers(member.CurrentLocation, peer.CurrentLocation)
+					member.RCMutex.RLock()
+					registered := member.RegisteredClients[peer_uuid]
+					member.RCMutex.RUnlock()
+					if registered != nil {
+						if calculated_distance > ONE_THIRD_MILE {
+							member.WriteChan <- &types.WebsocketMessage{
+								Event: "peer",
+								Data:  "disconnected peer" + peer.UUID.String(),
+							}
+							peer.WriteChan <- &types.WebsocketMessage{
+								Event: "peer",
+								Data:  "disconnected peer" + member.UUID.String(),
+							}
+							member.Unregister <- peer
+							peer.Unregister <- member
+							delete(filtered_clients, peer_uuid)
+
+						}
+					} else if calculated_distance <= ONE_THIRD_MILE {
+						member.WriteChan <- &types.WebsocketMessage{
+							Event: "peer",
+							Data:  "connected peer" + peer.UUID.String(),
+						}
+						peer.WriteChan <- &types.WebsocketMessage{
+							Event: "peer",
+							Data:  "connected peer" + member.UUID.String(),
+						}
+						member.Register <- peer
+						peer.Register <- member
+						delete(filtered_clients, peer_uuid)
+					}
+				}
+			}
 		}
 	}
+}
+
+func calculateDistanceBetweenPeers(from *types.LocationData, to *types.LocationData) float64 {
+	return math.Sqrt(math.Pow((to.Latitude-from.Latitude), 2) + math.Pow((to.Longitude-from.Longitude), 2))
 }

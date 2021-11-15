@@ -34,13 +34,19 @@ type Client struct {
 	InboundAudio chan []byte
 
 	// A map of client uuid (key) to outbound audio tracks (value).
-	RegisteredClients map[uuid.UUID]*webrtc.TrackLocalStaticRTP
+	RegisteredClients map[uuid.UUID]*types.AudioBundle
 
 	// A reference to the peers peer connection object.
 	PeerConnection *webrtc.PeerConnection
 
+	// The clients current location
+	CurrentLocation *types.LocationData
+
 	// A mutex to lock a client so that only one resource can modify its peer connection at a time.
-	Mutex sync.Mutex
+	PCMutex sync.Mutex
+
+	// A mutex to lock the registered clients list
+	RCMutex sync.RWMutex
 }
 
 func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
@@ -53,7 +59,7 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 		WriteChan:         make(chan *types.WebsocketMessage),
 		Register:          make(chan *Client),
 		Unregister:        make(chan *Client),
-		RegisteredClients: make(map[uuid.UUID]*webrtc.TrackLocalStaticRTP),
+		RegisteredClients: make(map[uuid.UUID]*types.AudioBundle),
 		InboundAudio:      make(chan []byte, 1500),
 	}
 }
@@ -85,7 +91,10 @@ func Reader(client *Client) {
 		} else if err := json.Unmarshal(raw, &message); err != nil {
 			log.Printf("Error unmarshaling: %+v", err)
 		}
-		log.Printf("New message from %s: %+v", client.UUID, message.Event)
+
+		if message.Event != "update_location" {
+			log.Printf("New message from %s: %+v", client.UUID, message.Event)
+		}
 
 		switch message.Event {
 		case "wrtc_connect":
@@ -94,6 +103,10 @@ func Reader(client *Client) {
 
 		case "wrtc_offer":
 			handleOffer(client, message)
+			break
+
+		case "wrtc_disconnect":
+			handleDisconnect(client)
 			break
 
 		case "wrtc_answer":
@@ -105,15 +118,21 @@ func Reader(client *Client) {
 			break
 
 		case "voice":
-			// RouteAudioToClients(client, client)
-			for uuid, member := range client.Nucleus.Clients {
-				if uuid != client.UUID {
-					member.Register <- client
-				}
+			for _, member := range client.Nucleus.Clients {
+				member.Register <- client
 			}
 			break
 
 		case "mute":
+			// for _, member := range client.Nucleus.Clients {
+			// 	member.Unregister <- client
+			// }
+			client.RegisteredClients[client.UUID] = &types.AudioBundle{}
+
+			bundle := client.RegisteredClients[client.UUID]
+
+			log.Printf("%+v\n", bundle)
+
 			client.WriteChan <- &types.WebsocketMessage{
 				Event: "test",
 				Data:  "testing",
@@ -123,7 +142,12 @@ func Reader(client *Client) {
 		case "wrtc_renegotiation_needed":
 			handleRenegotiation(client, message)
 			break
+
+		case "update_location":
+			updateClientLocation(client, message)
+			break
 		}
+
 	}
 }
 
@@ -139,9 +163,10 @@ func Writer(client *Client) {
 		log.Printf("Writing to client, %+v", data.Event)
 		err := client.Socket.Conn.WriteJSON(data)
 		if err != nil {
+			// if writing to the socket fails, function returns and defer block is called
 			log.Printf("Write error %+v", err)
+			return
 		}
-		// what happens if write fails?
 	}
 }
 
@@ -151,21 +176,36 @@ func Registration(client *Client) {
 		select {
 		case registree := <-client.Register:
 			// add track to client, add track to global list of senders.
-			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", registree.UUID.String())
+			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", client.UUID.String())
 			if err != nil {
 				log.Println(err)
 			}
 
-			if _, err := registree.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
-				Direction: webrtc.RTPTransceiverDirectionSendonly}); err != nil {
+			transceiver, err := registree.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
+				Direction: webrtc.RTPTransceiverDirectionSendonly})
+			if err != nil {
 				log.Println(err)
 			}
 
-			client.RegisteredClients[registree.UUID] = newTrack
+			bundle := &types.AudioBundle{
+				Transceiver: transceiver,
+				Track:       newTrack,
+			}
+
+			client.RCMutex.Lock()
+			client.RegisteredClients[registree.UUID] = bundle
+			client.RCMutex.Unlock()
 			break
 		case unregistree := <-client.Unregister:
-			// unregistree.PeerConnection.RemoveTrack()
+			// Peer connection needs to be in a stable state, lock the client mutex.
+			// unregistreeBundle := client.RegisteredClients[unregistree.UUID]
+			// if err := unregistree.PeerConnection.RemoveTrack(unregistreeBundle.Transceiver.Sender()); err != nil {
+			// 	log.Printf("Error removing track on unregistree peer connection %s\n", err)
+			// }
+			// unregistreeBundle.Transceiver.Stop()
+			client.RCMutex.Lock()
 			delete(client.RegisteredClients, unregistree.UUID)
+			client.RCMutex.Unlock()
 			break
 		}
 	}
@@ -174,10 +214,20 @@ func Registration(client *Client) {
 func RouteAudioToClients(client *Client) {
 	for {
 		packet := <-client.InboundAudio
-		for _, registreeTrack := range client.RegisteredClients {
-			registreeTrack.Write(packet)
+		for _, registreeBundle := range client.RegisteredClients {
+			registreeBundle.Track.Write(packet)
 		}
 	}
+}
+
+func updateClientLocation(client *Client, message *types.WebsocketMessage) {
+
+	location := &types.LocationData{}
+	if err := json.Unmarshal([]byte(message.Data), &location); err != nil {
+		log.Print(err)
+	}
+	// log.Printf("%+v\n", location)
+	client.CurrentLocation = location
 }
 
 func createPeerConnection(client *Client) {
@@ -251,8 +301,10 @@ func createPeerConnection(client *Client) {
 				Event: "wrtc_failed",
 			}
 			if closeErr := peerConnection.Close(); closeErr != nil {
-				log.Printf("Close err %s", closeErr)
+				log.Printf("Error closing the peer connection %s", closeErr)
 			}
+
+			client.PeerConnection = nil
 		}
 	})
 
@@ -269,16 +321,20 @@ func createPeerConnection(client *Client) {
 			if err != nil {
 				return
 			}
-
 			client.InboundAudio <- buff[:i]
-
-			// if _, err = client.InboundAudio.Write(buff[:i]); err != nil {
-			// 	return
-			// }
 		}
 	})
 
+	client.PCMutex.Lock()
 	client.PeerConnection = peerConnection
+	client.PCMutex.Unlock()
+}
+
+func handleDisconnect(client *Client) {
+	if client.PeerConnection != nil {
+		client.PeerConnection.Close()
+		client.PeerConnection = nil
+	}
 }
 
 func handleRenegotiation(client *Client, message *types.WebsocketMessage) {
