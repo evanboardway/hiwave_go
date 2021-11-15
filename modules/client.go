@@ -40,7 +40,7 @@ type Client struct {
 	PeerConnection *webrtc.PeerConnection
 
 	// The clients current location
-	CurrentLocation chan *types.LocationData
+	CurrentLocation *types.LocationData
 
 	// A mutex to lock a client so that only one resource can modify its peer connection at a time.
 	PCMutex sync.Mutex
@@ -59,7 +59,6 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 		Register:          make(chan *Client),
 		Unregister:        make(chan *Client),
 		RegisteredClients: make(map[uuid.UUID]*types.AudioBundle),
-		CurrentLocation:   make(chan *types.LocationData),
 		InboundAudio:      make(chan []byte, 1500),
 	}
 }
@@ -111,16 +110,21 @@ func Reader(client *Client) {
 			break
 
 		case "voice":
-			// RouteAudioToClients(client, client)
 			for _, member := range client.Nucleus.Clients {
 				member.Register <- client
 			}
 			break
 
 		case "mute":
-			for _, member := range client.Nucleus.Clients {
-				member.Unregister <- client
-			}
+			// for _, member := range client.Nucleus.Clients {
+			// 	member.Unregister <- client
+			// }
+			client.RegisteredClients[client.UUID] = &types.AudioBundle{}
+
+			bundle := client.RegisteredClients[client.UUID]
+
+			log.Printf("%+v\n", bundle)
+
 			client.WriteChan <- &types.WebsocketMessage{
 				Event: "test",
 				Data:  "testing",
@@ -151,9 +155,10 @@ func Writer(client *Client) {
 		log.Printf("Writing to client, %+v", data.Event)
 		err := client.Socket.Conn.WriteJSON(data)
 		if err != nil {
+			// if writing to the socket fails, function returns and defer block is called
 			log.Printf("Write error %+v", err)
+			return
 		}
-		// what happens if write fails?
 	}
 }
 
@@ -207,8 +212,8 @@ func updateClientLocation(client *Client, message *types.WebsocketMessage) {
 	if err := json.Unmarshal([]byte(message.Data), &location); err != nil {
 		log.Print(err)
 	}
-	log.Printf("%+v\n", location)
-	client.CurrentLocation <- location
+	// log.Printf("%+v\n", location)
+	client.CurrentLocation = location
 }
 
 func createPeerConnection(client *Client) {
@@ -282,8 +287,10 @@ func createPeerConnection(client *Client) {
 				Event: "wrtc_failed",
 			}
 			if closeErr := peerConnection.Close(); closeErr != nil {
-				log.Printf("Close err %s", closeErr)
+				log.Printf("Error closing the peer connection %s", closeErr)
 			}
+
+			client.PeerConnection = nil
 		}
 	})
 
@@ -306,7 +313,9 @@ func createPeerConnection(client *Client) {
 		}
 	})
 
+	client.PCMutex.Lock()
 	client.PeerConnection = peerConnection
+	client.PCMutex.Unlock()
 }
 
 func handleRenegotiation(client *Client, message *types.WebsocketMessage) {

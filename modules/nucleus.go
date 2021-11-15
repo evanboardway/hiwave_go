@@ -64,27 +64,52 @@ func Enable(nucleus *Nucleus) {
 func LocateAndConnect(nucleus *Nucleus) {
 	for {
 		nucleus.Mutex.Lock()
-		for uuid, member := range nucleus.Clients {
-			for peer_uuid, peer := range nucleus.Clients {
+		filtered_clients := make(map[uuid.UUID]*Client)
+		for _, peer := range nucleus.Clients {
+			peer.PCMutex.Lock()
+			if peer.PeerConnection != nil {
+				filtered_clients[peer.UUID] = peer
+			}
+			peer.PCMutex.Unlock()
+		}
+		nucleus.Mutex.Unlock()
+
+		for member_uuid, member := range filtered_clients {
+			for peer_uuid, peer := range filtered_clients {
 				// Check that peer and member are different clients and
 				// check that they arent already registered to eachother.
-				if uuid != peer_uuid {
-					calculated_distance := calculateDistanceBetweenPeers(<-member.CurrentLocation, <-peer.CurrentLocation)
+				if member_uuid != peer_uuid {
+					calculated_distance := calculateDistanceBetweenPeers(member.CurrentLocation, peer.CurrentLocation)
 
-					if _, registered := member.RegisteredClients[peer.UUID]; registered && calculated_distance > ONE_THIRD_MILE {
-						member.Unregister <- peer
-						peer.Unregister <- member
-						break
-					}
-
-					if calculated_distance <= ONE_THIRD_MILE {
+					if registered := member.RegisteredClients[peer_uuid]; registered != nil {
+						if calculated_distance > ONE_THIRD_MILE {
+							member.WriteChan <- &types.WebsocketMessage{
+								Event: "peer",
+								Data:  "disconnected peer" + peer.UUID.String(),
+							}
+							peer.WriteChan <- &types.WebsocketMessage{
+								Event: "peer",
+								Data:  "disconnected peer" + member.UUID.String(),
+							}
+							member.Unregister <- peer
+							peer.Unregister <- member
+							delete(filtered_clients, peer_uuid)
+						}
+					} else if calculated_distance <= ONE_THIRD_MILE {
+						member.WriteChan <- &types.WebsocketMessage{
+							Event: "peer",
+							Data:  "connected peer" + peer.UUID.String(),
+						}
+						peer.WriteChan <- &types.WebsocketMessage{
+							Event: "peer",
+							Data:  "connected peer" + member.UUID.String(),
+						}
 						member.Register <- peer
 						peer.Register <- member
 					}
 				}
 			}
 		}
-		nucleus.Mutex.Unlock()
 	}
 }
 
