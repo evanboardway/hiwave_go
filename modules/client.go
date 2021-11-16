@@ -124,19 +124,19 @@ func Reader(client *Client) {
 			break
 
 		case "mute":
-			// for _, member := range client.Nucleus.Clients {
-			// 	member.Unregister <- client
-			// }
-			client.RegisteredClients[client.UUID] = &types.AudioBundle{}
-
-			bundle := client.RegisteredClients[client.UUID]
-
-			log.Printf("%+v\n", bundle)
-
-			client.WriteChan <- &types.WebsocketMessage{
-				Event: "test",
-				Data:  "testing",
+			for _, member := range client.Nucleus.Clients {
+				member.Unregister <- client
 			}
+			// client.RegisteredClients[client.UUID] = &types.AudioBundle{}
+
+			// bundle := client.RegisteredClients[client.UUID]
+
+			// log.Printf("%+v\n", bundle)
+
+			// client.WriteChan <- &types.WebsocketMessage{
+			// 	Event: "test",
+			// 	Data:  "testing",
+			// }
 			break
 
 		case "wrtc_renegotiation_needed":
@@ -226,8 +226,34 @@ func updateClientLocation(client *Client, message *types.WebsocketMessage) {
 	if err := json.Unmarshal([]byte(message.Data), &location); err != nil {
 		log.Print(err)
 	}
+
+	bundle := &types.LocationBundle{
+		UUID:     client.UUID,
+		Location: location,
+	}
+
 	// log.Printf("%+v\n", location)
 	client.CurrentLocation = location
+
+	loc, err := json.Marshal(bundle)
+	if err != nil {
+		log.Printf("Error marshaling client location: %s", err)
+	}
+	client.WriteChan <- &types.WebsocketMessage{
+		Event: "peer_location",
+		Data:  string(loc),
+	}
+
+	// for uuid := range client.RegisteredClients {
+	// 	loc, err := json.Marshal(client.CurrentLocation)
+	// 	if err != nil {
+	// 		log.Printf("Error marshaling client location: %s", err)
+	// 	}
+	// 	client.Nucleus.Clients[uuid].WriteChan <- &types.WebsocketMessage{
+	// 		Event: "peer_location",
+	// 		Data:  string(loc),
+	// 	}
+	// }
 }
 
 func createPeerConnection(client *Client) {
