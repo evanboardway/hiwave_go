@@ -30,8 +30,14 @@ type Client struct {
 	// A channel for unregistering clients to their audio stream.
 	Unregister chan *Client
 
+	// A channel to stop the registration goroutine
+	StopRegistration chan bool
+
 	// A track referencing audio packets being sent from the client.
 	InboundAudio chan []byte
+
+	// A channel to stop routing audio to peers
+	StopRoutingAudio chan bool
 
 	// A map of client uuid (key) to outbound audio tracks (value).
 	RegisteredClients map[uuid.UUID]*types.AudioBundle
@@ -59,6 +65,8 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 		WriteChan:         make(chan *types.WebsocketMessage),
 		Register:          make(chan *Client),
 		Unregister:        make(chan *Client),
+		StopRegistration:  make(chan bool),
+		StopRoutingAudio:  make(chan bool),
 		RegisteredClients: make(map[uuid.UUID]*types.AudioBundle),
 		InboundAudio:      make(chan []byte, 1500),
 	}
@@ -72,6 +80,7 @@ func Reader(client *Client) {
 		// peer connection close
 		client.Nucleus.Unsubscribe <- client
 		client.Socket.Conn.Close()
+		shutdownClient(client)
 	}()
 
 	// Read message from the socket, determine where it should go.
@@ -207,16 +216,24 @@ func Registration(client *Client) {
 			delete(client.RegisteredClients, unregistree.UUID)
 			client.RCMutex.Unlock()
 			break
+		case <-client.StopRegistration:
+			return
 		}
 	}
 }
 
 func RouteAudioToClients(client *Client) {
 	for {
-		packet := <-client.InboundAudio
-		for _, registreeBundle := range client.RegisteredClients {
-			registreeBundle.Track.Write(packet)
+		select {
+		case packet := <-client.InboundAudio:
+			for _, registreeBundle := range client.RegisteredClients {
+				registreeBundle.Track.Write(packet)
+			}
+			break
+		case <-client.StopRoutingAudio:
+			return
 		}
+
 	}
 }
 
@@ -351,6 +368,9 @@ func createPeerConnection(client *Client) {
 		}
 	})
 
+	// Send incoming audio packets to all clients registered to this client.
+	go RouteAudioToClients(client)
+
 	client.PCMutex.Lock()
 	client.PeerConnection = peerConnection
 	client.PCMutex.Unlock()
@@ -358,6 +378,7 @@ func createPeerConnection(client *Client) {
 
 func handleDisconnect(client *Client) {
 	if client.PeerConnection != nil {
+		client.StopRoutingAudio <- true
 		client.PeerConnection.Close()
 		client.PeerConnection = nil
 	}
@@ -454,4 +475,9 @@ func handleAnswer(client *Client, message *types.WebsocketMessage) {
 		log.Printf("Error setting remote description: %s", err)
 	}
 
+}
+
+func shutdownClient(client *Client) {
+	client.StopRegistration <- true
+	client.StopRoutingAudio <- true
 }
