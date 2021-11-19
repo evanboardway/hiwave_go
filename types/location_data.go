@@ -1,5 +1,7 @@
 package types
 
+import "github.com/google/uuid"
+
 type LocationData struct {
 	Altitude         float64
 	AltitudeAccuracy float64
@@ -8,4 +10,9 @@ type LocationData struct {
 	Longitude        float64
 	Heading          float64
 	Speed            float64
+}
+
+type LocationBundle struct {
+	UUID     uuid.UUID
+	Location *LocationData
 }

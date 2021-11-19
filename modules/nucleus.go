@@ -49,11 +49,13 @@ func Enable(nucleus *Nucleus) {
 		case sub := <-nucleus.Subscribe:
 			nucleus.Mutex.Lock()
 			nucleus.Clients[sub.UUID] = sub
+			log.Printf("Connected clients: %+v\n", nucleus.Clients)
 			nucleus.Mutex.Unlock()
 			log.Printf("Subscribed client")
 		case unsub := <-nucleus.Unsubscribe:
 			nucleus.Mutex.Lock()
 			delete(nucleus.Clients, unsub.UUID)
+			log.Printf("Connected clients: %+v\n", nucleus.Clients)
 			nucleus.Mutex.Unlock()
 			log.Printf("Unsubed client")
 		}
@@ -80,9 +82,8 @@ func LocateAndConnect(nucleus *Nucleus) {
 				// check that they arent already registered to eachother.
 				if member_uuid != peer_uuid {
 					calculated_distance := calculateDistanceBetweenPeers(member.CurrentLocation, peer.CurrentLocation)
-					member.RCMutex.RLock()
+					member.RCMutex.Lock()
 					registered := member.RegisteredClients[peer_uuid]
-					member.RCMutex.RUnlock()
 					if registered != nil {
 						if calculated_distance > ONE_THIRD_MILE {
 							member.WriteChan <- &types.WebsocketMessage{
@@ -96,7 +97,6 @@ func LocateAndConnect(nucleus *Nucleus) {
 							member.Unregister <- peer
 							peer.Unregister <- member
 							delete(filtered_clients, peer_uuid)
-
 						}
 					} else if calculated_distance <= ONE_THIRD_MILE {
 						member.WriteChan <- &types.WebsocketMessage{
@@ -111,6 +111,7 @@ func LocateAndConnect(nucleus *Nucleus) {
 						peer.Register <- member
 						delete(filtered_clients, peer_uuid)
 					}
+					member.RCMutex.Unlock()
 				}
 			}
 		}
