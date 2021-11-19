@@ -49,11 +49,13 @@ func Enable(nucleus *Nucleus) {
 		case sub := <-nucleus.Subscribe:
 			nucleus.Mutex.Lock()
 			nucleus.Clients[sub.UUID] = sub
+			log.Printf("Connected clients: %+v\n", nucleus.Clients)
 			nucleus.Mutex.Unlock()
 			log.Printf("Subscribed client")
 		case unsub := <-nucleus.Unsubscribe:
 			nucleus.Mutex.Lock()
 			delete(nucleus.Clients, unsub.UUID)
+			log.Printf("Connected clients: %+v\n", nucleus.Clients)
 			nucleus.Mutex.Unlock()
 			log.Printf("Unsubed client")
 		}

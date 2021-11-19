@@ -163,6 +163,7 @@ func Reader(client *Client) {
 // Write to socket synchronously (unbuffered chan)
 func Writer(client *Client) {
 	defer func() {
+		shutdownClient(client)
 		client.Socket.Conn.Close()
 		client.Nucleus.Unsubscribe <- client
 	}()
@@ -184,6 +185,7 @@ func Registration(client *Client) {
 		// select statement in golang is nonblocking to the channel.
 		select {
 		case registree := <-client.Register:
+			log.Printf("Registered client %s to client %s\n", registree.UUID, client.UUID)
 			// add track to client, add track to global list of senders.
 			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", client.UUID.String())
 			if err != nil {
@@ -203,18 +205,31 @@ func Registration(client *Client) {
 
 			client.RCMutex.Lock()
 			client.RegisteredClients[registree.UUID] = bundle
+			log.Printf("Registered clients: %+v\n", client.RegisteredClients)
 			client.RCMutex.Unlock()
 			break
 		case unregistree := <-client.Unregister:
+			log.Printf("Unregistered client %s from client %s\n", unregistree.UUID, client.UUID)
+
 			// Peer connection needs to be in a stable state, lock the client mutex.
-			// unregistreeBundle := client.RegisteredClients[unregistree.UUID]
-			// if err := unregistree.PeerConnection.RemoveTrack(unregistreeBundle.Transceiver.Sender()); err != nil {
-			// 	log.Printf("Error removing track on unregistree peer connection %s\n", err)
-			// }
-			// unregistreeBundle.Transceiver.Stop()
+			unregistreeBundle := client.RegisteredClients[unregistree.UUID]
+			log.Printf("Unregistree audio bundle: %+v\n", unregistreeBundle)
+
+			if err := unregistree.PeerConnection.RemoveTrack(unregistreeBundle.Transceiver.Sender()); err != nil {
+				log.Printf("Error removing track on unregistree peer connection %s\n", err)
+			}
+
+			unregistreeBundle.Transceiver.Stop()
+
 			client.RCMutex.Lock()
 			delete(client.RegisteredClients, unregistree.UUID)
+			log.Printf("Registered clients: %+v\n", client.RegisteredClients)
 			client.RCMutex.Unlock()
+
+			client.WriteChan <- &types.WebsocketMessage{
+				Event: "wrtc_remove_track",
+				Data:  unregistree.UUID.String(),
+			}
 			break
 		case <-client.StopRegistration:
 			return
