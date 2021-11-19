@@ -133,9 +133,10 @@ func Reader(client *Client) {
 			break
 
 		case "mute":
-			for _, member := range client.Nucleus.Clients {
-				member.Unregister <- client
-			}
+			// for _, member := range client.Nucleus.Clients {
+			// 	member.Unregister <- client
+			// }
+			log.Printf("TRIGGERED LISTING: %+v\n", client.RegisteredClients)
 			// client.RegisteredClients[client.UUID] = &types.AudioBundle{}
 
 			// bundle := client.RegisteredClients[client.UUID]
@@ -222,8 +223,8 @@ func Registration(client *Client) {
 			unregistreeBundle.Transceiver.Stop()
 
 			client.RCMutex.Lock()
-			delete(client.RegisteredClients, unregistree.UUID)
 			log.Printf("Registered clients: %+v\n", client.RegisteredClients)
+			delete(client.RegisteredClients, unregistree.UUID)
 			client.RCMutex.Unlock()
 
 			client.WriteChan <- &types.WebsocketMessage{
@@ -267,25 +268,25 @@ func updateClientLocation(client *Client, message *types.WebsocketMessage) {
 	// log.Printf("%+v\n", location)
 	client.CurrentLocation = location
 
-	loc, err := json.Marshal(bundle)
-	if err != nil {
-		log.Printf("Error marshaling client location: %s", err)
-	}
-	client.WriteChan <- &types.WebsocketMessage{
-		Event: "peer_location",
-		Data:  string(loc),
-	}
-
-	// for uuid := range client.RegisteredClients {
-	// 	loc, err := json.Marshal(client.CurrentLocation)
-	// 	if err != nil {
-	// 		log.Printf("Error marshaling client location: %s", err)
-	// 	}
-	// 	client.Nucleus.Clients[uuid].WriteChan <- &types.WebsocketMessage{
-	// 		Event: "peer_location",
-	// 		Data:  string(loc),
-	// 	}
+	// loc, err := json.Marshal(bundle)
+	// if err != nil {
+	// 	log.Printf("Error marshaling client location: %s", err)
 	// }
+	// client.WriteChan <- &types.WebsocketMessage{
+	// 	Event: "peer_location",
+	// 	Data:  string(loc),
+	// }
+
+	for uuid := range client.RegisteredClients {
+		loc, err := json.Marshal(bundle)
+		if err != nil {
+			log.Printf("Error marshaling client location: %s", err)
+		}
+		client.Nucleus.Clients[uuid].WriteChan <- &types.WebsocketMessage{
+			Event: "peer_location",
+			Data:  string(loc),
+		}
+	}
 }
 
 func createPeerConnection(client *Client) {
