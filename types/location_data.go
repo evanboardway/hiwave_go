@@ -1,6 +1,15 @@
 package types
 
-import "github.com/google/uuid"
+import (
+	"math"
+
+	"github.com/google/uuid"
+)
+
+var (
+	// 1/3 mile in terms of geographical coordinates
+	ONE_THIRD_MILE = 0.00483091787
+)
 
 type LocationData struct {
 	Altitude         float64
@@ -15,4 +24,8 @@ type LocationData struct {
 type LocationBundle struct {
 	UUID     uuid.UUID
 	Location *LocationData
+}
+
+func WithinRange(from *LocationData, to *LocationData) bool {
+	return math.Sqrt(math.Pow((to.Latitude-from.Latitude), 2)+math.Pow((to.Longitude-from.Longitude), 2)) <= ONE_THIRD_MILE
 }

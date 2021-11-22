@@ -30,14 +30,17 @@ type Client struct {
 	// A channel for unregistering clients to their audio stream.
 	Unregister chan *Client
 
-	// A channel to stop the registration goroutine
-	StopRegistration chan bool
-
 	// A track referencing audio packets being sent from the client.
 	InboundAudio chan []byte
 
+	// A channel to stop the registration goroutine
+	StopRegistration chan bool
+
 	// A channel to stop routing audio to peers
 	StopRoutingAudio chan bool
+
+	// A channel to stop locate and connect function
+	StopLAC chan bool
 
 	// A map of client uuid (key) to outbound audio tracks (value).
 	RegisteredClients map[uuid.UUID]*types.AudioBundle
@@ -67,6 +70,7 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 		Unregister:        make(chan *Client),
 		StopRegistration:  make(chan bool),
 		StopRoutingAudio:  make(chan bool),
+		StopLAC:           make(chan bool),
 		RegisteredClients: make(map[uuid.UUID]*types.AudioBundle),
 		InboundAudio:      make(chan []byte, 1500),
 	}
@@ -238,6 +242,48 @@ func Registration(client *Client) {
 	}
 }
 
+// Register and unregister peers to this clients's audio streams based on relative location.
+func locateAndConnect(client *Client) {
+	for {
+		select {
+		case <-client.StopLAC:
+			return
+		default:
+			client.Nucleus.Mutex.RLock()
+			filtered_clients := make(map[uuid.UUID]*Client)
+			for _, peer := range client.Nucleus.Clients {
+				if peer.PeerConnection != nil && peer.UUID != client.UUID {
+					filtered_clients[peer.UUID] = peer
+				}
+			}
+			client.Nucleus.Mutex.RUnlock()
+
+			for peer_uuid, peer := range filtered_clients {
+				within_range := types.WithinRange(client.CurrentLocation, peer.CurrentLocation)
+				client.RCMutex.RLock()
+				registered := client.RegisteredClients[peer_uuid]
+				if registered != nil {
+					if within_range {
+						client.WriteChan <- &types.WebsocketMessage{
+							Event: "peer",
+							Data:  "connected peer" + peer.UUID.String(),
+						}
+						client.Register <- peer
+					} else {
+						client.WriteChan <- &types.WebsocketMessage{
+							Event: "peer",
+							Data:  "disconnected peer" + peer.UUID.String(),
+						}
+						client.Unregister <- peer
+					}
+				}
+				client.RCMutex.RUnlock()
+			}
+
+		}
+	}
+}
+
 func RouteAudioToClients(client *Client) {
 	for {
 		select {
@@ -390,6 +436,9 @@ func createPeerConnection(client *Client) {
 	client.PCMutex.Lock()
 	client.PeerConnection = peerConnection
 	client.PCMutex.Unlock()
+
+	// Start locating and connecting to other clients.
+	go locateAndConnect(client)
 }
 
 func handleDisconnect(client *Client) {
@@ -496,4 +545,5 @@ func handleAnswer(client *Client, message *types.WebsocketMessage) {
 func shutdownClient(client *Client) {
 	client.StopRegistration <- true
 	client.StopRoutingAudio <- true
+	client.StopLAC <- true
 }
