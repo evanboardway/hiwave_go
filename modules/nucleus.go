@@ -36,7 +36,6 @@ func CreateNucleus() *Nucleus {
 
 func Enable(nucleus *Nucleus) {
 	log.Printf("Nucleus enable")
-	// go LocateAndConnect(nucleus)
 	for {
 		select {
 		case sub := <-nucleus.Subscribe:

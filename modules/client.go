@@ -45,6 +45,9 @@ type Client struct {
 	// A map of client uuid (key) to outbound audio tracks (value).
 	RegisteredClients map[uuid.UUID]*types.AudioBundle
 
+	// List of clients awaiting registration
+	RegistrationQueue *[]uuid.UUID
+
 	// A reference to the peers peer connection object.
 	PeerConnection *webrtc.PeerConnection
 
@@ -56,6 +59,9 @@ type Client struct {
 
 	// A mutex to lock the registered clients list
 	RCMutex sync.RWMutex
+
+	// A mutex to lock the registration process
+	RegistrationQueueMutex sync.Mutex
 }
 
 func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
@@ -72,6 +78,7 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 		StopRoutingAudio:  make(chan bool),
 		StopLAC:           make(chan bool),
 		RegisteredClients: make(map[uuid.UUID]*types.AudioBundle),
+		RegistrationQueue: new([]uuid.UUID),
 		InboundAudio:      make(chan []byte, 1500),
 	}
 }
@@ -105,9 +112,9 @@ func Reader(client *Client) {
 			log.Printf("Error unmarshaling: %+v", err)
 		}
 
-		if message.Event != "update_location" {
-			log.Printf("New message from %s: %+v", client.UUID, message.Event)
-		}
+		// if message.Event != "update_location" {
+		// 	log.Printf("New message from %s: %+v", client.UUID, message.Event)
+		// }
 
 		switch message.Event {
 		case "wrtc_connect":
@@ -137,10 +144,10 @@ func Reader(client *Client) {
 			break
 
 		case "mute":
-			// for _, member := range client.Nucleus.Clients {
-			// 	member.Unregister <- client
-			// }
-			log.Printf("TRIGGERED LISTING: %+v\n", client.RegisteredClients)
+			for _, member := range client.Nucleus.Clients {
+				member.Unregister <- client
+			}
+			// log.Printf("TRIGGERED LISTING: %+v\n", client.RegisteredClients)
 			// client.RegisteredClients[client.UUID] = &types.AudioBundle{}
 
 			// bundle := client.RegisteredClients[client.UUID]
@@ -175,7 +182,7 @@ func Writer(client *Client) {
 
 	for {
 		data := <-client.WriteChan
-		log.Printf("Writing to client, %+v", data.Event)
+		// log.Printf("Writing to client, %+v", data.Event)
 		err := client.Socket.Conn.WriteJSON(data)
 		if err != nil {
 			// if writing to the socket fails, function returns and defer block is called
@@ -190,7 +197,10 @@ func Registration(client *Client) {
 		// select statement in golang is nonblocking to the channel.
 		select {
 		case registree := <-client.Register:
-			log.Printf("Registered client %s to client %s\n", registree.UUID, client.UUID)
+
+			client.RCMutex.Lock()
+			fmt.Printf("%s REG Locked RC MUTEX\n", client.UUID)
+
 			// add track to client, add track to global list of senders.
 			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", client.UUID.String())
 			if err != nil {
@@ -208,17 +218,19 @@ func Registration(client *Client) {
 				Track:       newTrack,
 			}
 
-			client.RCMutex.Lock()
 			client.RegisteredClients[registree.UUID] = bundle
-			log.Printf("Registered clients: %+v\n", client.RegisteredClients)
+			log.Printf("Registered client %s to client %s\n", registree.UUID, client.UUID)
 			client.RCMutex.Unlock()
+			fmt.Printf("%s REG Unlocked RC MUTEX\n", client.UUID)
 			break
 		case unregistree := <-client.Unregister:
-			log.Printf("Unregistered client %s from client %s\n", unregistree.UUID, client.UUID)
+
+			log.Printf("Unregistering client %s from client %s\n", unregistree.UUID, client.UUID)
+			client.RCMutex.Lock()
 
 			// Peer connection needs to be in a stable state, lock the client mutex.
 			unregistreeBundle := client.RegisteredClients[unregistree.UUID]
-			log.Printf("Unregistree audio bundle: %+v\n", unregistreeBundle)
+			log.Printf("Unregistree audio bundle: %+v cli: %s\n", unregistreeBundle, client.UUID)
 
 			if err := unregistree.PeerConnection.RemoveTrack(unregistreeBundle.Transceiver.Sender()); err != nil {
 				log.Printf("Error removing track on unregistree peer connection %s\n", err)
@@ -226,9 +238,9 @@ func Registration(client *Client) {
 
 			unregistreeBundle.Transceiver.Stop()
 
-			client.RCMutex.Lock()
-			log.Printf("Registered clients: %+v\n", client.RegisteredClients)
 			delete(client.RegisteredClients, unregistree.UUID)
+			log.Printf("Unregistered client %s from client %s\n", unregistree.UUID, client.UUID)
+
 			client.RCMutex.Unlock()
 
 			client.WriteChan <- &types.WebsocketMessage{
@@ -249,6 +261,7 @@ func locateAndConnect(client *Client) {
 		case <-client.StopLAC:
 			return
 		default:
+			// Compile a list of all the clients that are connected and not the same as the client param.
 			client.Nucleus.Mutex.RLock()
 			filtered_clients := make(map[uuid.UUID]*Client)
 			for _, peer := range client.Nucleus.Clients {
@@ -261,28 +274,37 @@ func locateAndConnect(client *Client) {
 			for peer_uuid, peer := range filtered_clients {
 				within_range := types.WithinRange(client.CurrentLocation, peer.CurrentLocation)
 				client.RCMutex.RLock()
+				fmt.Printf("%s LAC Locked RC Mut\n", client.UUID)
 				registered := client.RegisteredClients[peer_uuid]
 				if registered != nil {
-					if within_range {
-						client.WriteChan <- &types.WebsocketMessage{
-							Event: "peer",
-							Data:  "connected peer" + peer.UUID.String(),
-						}
-						client.Register <- peer
-					} else {
+					if within_range == false {
 						client.WriteChan <- &types.WebsocketMessage{
 							Event: "peer",
 							Data:  "disconnected peer" + peer.UUID.String(),
 						}
+						fmt.Printf("%s LAC Unregister peer\n", client.UUID)
 						client.Unregister <- peer
+					} else {
+						fmt.Printf("%s LAC registered and in range\n", client.UUID)
 					}
+				} else if within_range {
+					client.WriteChan <- &types.WebsocketMessage{
+						Event: "peer",
+						Data:  "connected peer" + peer.UUID.String(),
+					}
+					fmt.Printf("%s LAC register peer %s\n", client.UUID, peer_uuid)
+					client.Register <- peer
+				} else {
+					fmt.Printf("%s LAC noop\n", client.UUID)
 				}
+				fmt.Printf("%s LAC Unlocked RC Mut\n", client.UUID)
 				client.RCMutex.RUnlock()
 			}
-
 		}
 	}
 }
+
+// locateAndConnect attempts to unregister a client while they're in the process of unregistering already
 
 func RouteAudioToClients(client *Client) {
 	for {
@@ -352,7 +374,7 @@ func createPeerConnection(client *Client) {
 	}
 
 	peerConnection.OnNegotiationNeeded(func() {
-		log.Printf("PC EVENT: renegotiation needed, %s \n", peerConnection.SignalingState())
+		// log.Printf("PC EVENT: renegotiation needed, %s \n", peerConnection.SignalingState())
 
 		if peerConnection.SignalingState() != webrtc.SignalingStateStable {
 			log.Println("Blocked renegotiation due to pending offer")
@@ -399,7 +421,7 @@ func createPeerConnection(client *Client) {
 
 	// If the peer connection fails...
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		log.Printf("Connection State has changed to %s \n", connectionState.String())
+		// log.Printf("Connection State has changed to %s \n", connectionState.String())
 
 		if connectionState == webrtc.ICEConnectionStateFailed {
 			client.WriteChan <- &types.WebsocketMessage{
@@ -418,8 +440,6 @@ func createPeerConnection(client *Client) {
 	})
 
 	peerConnection.OnTrack(func(tr *webrtc.TrackRemote, r *webrtc.RTPReceiver) {
-		fmt.Println("ON TRACK")
-
 		buff := make([]byte, 1500)
 		for {
 			i, _, err := tr.Read(buff)
@@ -438,6 +458,7 @@ func createPeerConnection(client *Client) {
 	client.PCMutex.Unlock()
 
 	// Start locating and connecting to other clients.
+	fmt.Printf("%s STARTING LAC\n", client.UUID)
 	go locateAndConnect(client)
 }
 
