@@ -2,16 +2,9 @@ package modules
 
 import (
 	"log"
-	"math"
 	"sync"
 
-	"github.com/evanboardway/hiwave_go/types"
 	"github.com/google/uuid"
-)
-
-var (
-	// 1/3 mile in terms of geographical coordinates
-	ONE_THIRD_MILE = 0.00483091787
 )
 
 // The nucleus is the place where each client is stored.
@@ -28,7 +21,7 @@ type Nucleus struct {
 	Clients map[uuid.UUID]*Client
 
 	// Mutex to make sub and unsub chans one user only
-	Mutex sync.Mutex
+	Mutex sync.RWMutex
 }
 
 // Create a nucleus and return a pointer to it.
@@ -43,7 +36,6 @@ func CreateNucleus() *Nucleus {
 
 func Enable(nucleus *Nucleus) {
 	log.Printf("Nucleus enable")
-	go LocateAndConnect(nucleus)
 	for {
 		select {
 		case sub := <-nucleus.Subscribe:
@@ -60,64 +52,4 @@ func Enable(nucleus *Nucleus) {
 			log.Printf("Unsubed client")
 		}
 	}
-}
-
-// Register and unregister clients to eachothers audio streams based on location data.
-func LocateAndConnect(nucleus *Nucleus) {
-	for {
-		nucleus.Mutex.Lock()
-		filtered_clients := make(map[uuid.UUID]*Client)
-		for _, peer := range nucleus.Clients {
-			peer.PCMutex.Lock()
-			if peer.PeerConnection != nil {
-				filtered_clients[peer.UUID] = peer
-			}
-			peer.PCMutex.Unlock()
-		}
-		nucleus.Mutex.Unlock()
-
-		for member_uuid, member := range filtered_clients {
-			for peer_uuid, peer := range filtered_clients {
-				// Check that peer and member are different clients and
-				// check that they arent already registered to eachother.
-				if member_uuid != peer_uuid {
-					calculated_distance := calculateDistanceBetweenPeers(member.CurrentLocation, peer.CurrentLocation)
-					member.RCMutex.Lock()
-					registered := member.RegisteredClients[peer_uuid]
-					if registered != nil {
-						if calculated_distance > ONE_THIRD_MILE {
-							member.WriteChan <- &types.WebsocketMessage{
-								Event: "peer",
-								Data:  "disconnected peer" + peer.UUID.String(),
-							}
-							peer.WriteChan <- &types.WebsocketMessage{
-								Event: "peer",
-								Data:  "disconnected peer" + member.UUID.String(),
-							}
-							member.Unregister <- peer
-							peer.Unregister <- member
-							delete(filtered_clients, peer_uuid)
-						}
-					} else if calculated_distance <= ONE_THIRD_MILE {
-						member.WriteChan <- &types.WebsocketMessage{
-							Event: "peer",
-							Data:  "connected peer" + peer.UUID.String(),
-						}
-						peer.WriteChan <- &types.WebsocketMessage{
-							Event: "peer",
-							Data:  "connected peer" + member.UUID.String(),
-						}
-						member.Register <- peer
-						peer.Register <- member
-						delete(filtered_clients, peer_uuid)
-					}
-					member.RCMutex.Unlock()
-				}
-			}
-		}
-	}
-}
-
-func calculateDistanceBetweenPeers(from *types.LocationData, to *types.LocationData) float64 {
-	return math.Sqrt(math.Pow((to.Latitude-from.Latitude), 2) + math.Pow((to.Longitude-from.Longitude), 2))
 }
