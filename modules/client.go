@@ -33,9 +33,6 @@ type Client struct {
 	// A track referencing audio packets being sent from the client.
 	InboundAudio chan []byte
 
-	// A channel to stop the registration goroutine
-	StopRegistration chan bool
-
 	// A channel to stop routing audio to peers
 	StopRoutingAudio chan bool
 
@@ -44,9 +41,6 @@ type Client struct {
 
 	// A map of client uuid (key) to outbound audio tracks (value).
 	RegisteredClients map[uuid.UUID]*types.AudioBundle
-
-	// List of clients awaiting registration
-	RegistrationQueue *[]uuid.UUID
 
 	// A reference to the peers peer connection object.
 	PeerConnection *webrtc.PeerConnection
@@ -59,9 +53,6 @@ type Client struct {
 
 	// A mutex to lock the registered clients list
 	RCMutex sync.RWMutex
-
-	// A mutex to lock the registration process
-	RegistrationQueueMutex sync.Mutex
 }
 
 func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
@@ -74,11 +65,9 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 		WriteChan:         make(chan *types.WebsocketMessage),
 		Register:          make(chan *Client),
 		Unregister:        make(chan *Client),
-		StopRegistration:  make(chan bool),
 		StopRoutingAudio:  make(chan bool),
 		StopLAC:           make(chan bool),
 		RegisteredClients: make(map[uuid.UUID]*types.AudioBundle),
-		RegistrationQueue: new([]uuid.UUID),
 		InboundAudio:      make(chan []byte, 1500),
 	}
 }
@@ -192,65 +181,47 @@ func Writer(client *Client) {
 	}
 }
 
-func Registration(client *Client) {
-	for {
-		// select statement in golang is nonblocking to the channel.
-		select {
-		case registree := <-client.Register:
+func register(client *Client, registree *Client) {
 
-			client.RCMutex.Lock()
-			fmt.Printf("%s REG Locked RC MUTEX\n", client.UUID)
+	// add track to client, add track to global list of senders.
+	newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", client.UUID.String())
+	if err != nil {
+		log.Println(err)
+	}
 
-			// add track to client, add track to global list of senders.
-			newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", client.UUID.String())
-			if err != nil {
-				log.Println(err)
-			}
+	transceiver, err := registree.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionSendonly})
+	if err != nil {
+		log.Println(err)
+	}
 
-			transceiver, err := registree.PeerConnection.AddTransceiverFromTrack(newTrack, webrtc.RTPTransceiverInit{
-				Direction: webrtc.RTPTransceiverDirectionSendonly})
-			if err != nil {
-				log.Println(err)
-			}
+	bundle := &types.AudioBundle{
+		Transceiver: transceiver,
+		Track:       newTrack,
+	}
 
-			bundle := &types.AudioBundle{
-				Transceiver: transceiver,
-				Track:       newTrack,
-			}
+	client.RegisteredClients[registree.UUID] = bundle
+	log.Printf("Registered client %s to client %s\n", registree.UUID, client.UUID)
+}
 
-			client.RegisteredClients[registree.UUID] = bundle
-			log.Printf("Registered client %s to client %s\n", registree.UUID, client.UUID)
-			client.RCMutex.Unlock()
-			fmt.Printf("%s REG Unlocked RC MUTEX\n", client.UUID)
-			break
-		case unregistree := <-client.Unregister:
+func unregister(client *Client, unregistree *Client) {
 
-			log.Printf("Unregistering client %s from client %s\n", unregistree.UUID, client.UUID)
-			client.RCMutex.Lock()
+	// Peer connection needs to be in a stable state, lock the client mutex.
+	unregistreeBundle := client.RegisteredClients[unregistree.UUID]
+	log.Printf("Unregistree audio bundle: %+v cli: %s\n", unregistreeBundle, client.UUID)
 
-			// Peer connection needs to be in a stable state, lock the client mutex.
-			unregistreeBundle := client.RegisteredClients[unregistree.UUID]
-			log.Printf("Unregistree audio bundle: %+v cli: %s\n", unregistreeBundle, client.UUID)
+	if err := unregistree.PeerConnection.RemoveTrack(unregistreeBundle.Transceiver.Sender()); err != nil {
+		log.Printf("Error removing track on unregistree peer connection %s\n", err)
+	}
 
-			if err := unregistree.PeerConnection.RemoveTrack(unregistreeBundle.Transceiver.Sender()); err != nil {
-				log.Printf("Error removing track on unregistree peer connection %s\n", err)
-			}
+	unregistreeBundle.Transceiver.Stop()
 
-			unregistreeBundle.Transceiver.Stop()
+	delete(client.RegisteredClients, unregistree.UUID)
+	log.Printf("Unregistered client %s from client %s\n", unregistree.UUID, client.UUID)
 
-			delete(client.RegisteredClients, unregistree.UUID)
-			log.Printf("Unregistered client %s from client %s\n", unregistree.UUID, client.UUID)
-
-			client.RCMutex.Unlock()
-
-			client.WriteChan <- &types.WebsocketMessage{
-				Event: "wrtc_remove_track",
-				Data:  unregistree.UUID.String(),
-			}
-			break
-		case <-client.StopRegistration:
-			return
-		}
+	client.WriteChan <- &types.WebsocketMessage{
+		Event: "wrtc_remove_track",
+		Data:  unregistree.UUID.String(),
 	}
 }
 
@@ -273,8 +244,6 @@ func locateAndConnect(client *Client) {
 
 			for peer_uuid, peer := range filtered_clients {
 				within_range := types.WithinRange(client.CurrentLocation, peer.CurrentLocation)
-				client.RCMutex.RLock()
-				fmt.Printf("%s LAC Locked RC Mut\n", client.UUID)
 				registered := client.RegisteredClients[peer_uuid]
 				if registered != nil {
 					if within_range == false {
@@ -282,23 +251,15 @@ func locateAndConnect(client *Client) {
 							Event: "peer",
 							Data:  "disconnected peer" + peer.UUID.String(),
 						}
-						fmt.Printf("%s LAC Unregister peer\n", client.UUID)
-						client.Unregister <- peer
-					} else {
-						fmt.Printf("%s LAC registered and in range\n", client.UUID)
+						unregister(client, peer)
 					}
 				} else if within_range {
 					client.WriteChan <- &types.WebsocketMessage{
 						Event: "peer",
 						Data:  "connected peer" + peer.UUID.String(),
 					}
-					fmt.Printf("%s LAC register peer %s\n", client.UUID, peer_uuid)
-					client.Register <- peer
-				} else {
-					fmt.Printf("%s LAC noop\n", client.UUID)
+					register(client, peer)
 				}
-				fmt.Printf("%s LAC Unlocked RC Mut\n", client.UUID)
-				client.RCMutex.RUnlock()
 			}
 		}
 	}
@@ -564,7 +525,6 @@ func handleAnswer(client *Client, message *types.WebsocketMessage) {
 }
 
 func shutdownClient(client *Client) {
-	client.StopRegistration <- true
 	client.StopRoutingAudio <- true
 	client.StopLAC <- true
 }
