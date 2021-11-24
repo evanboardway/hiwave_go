@@ -180,7 +180,7 @@ func Writer(client *Client) {
 func register(client *Client, registree *Client) {
 
 	// add track to client, add track to global list of senders.
-	newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", client.UUID.String())
+	newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, client.UUID.String(), "sfu_audio")
 	if err != nil {
 		log.Println(err)
 	}
@@ -223,6 +223,9 @@ func unregister(client *Client, unregistree *Client) {
 
 // Register and unregister peers to this clients's audio streams based on relative location.
 func locateAndConnect(client *Client) {
+	defer func() {
+		log.Printf("Client %s stopped LAC\n", client.UUID)
+	}()
 	for {
 		select {
 		case <-client.StopLAC:
@@ -264,6 +267,9 @@ func locateAndConnect(client *Client) {
 // locateAndConnect attempts to unregister a client while they're in the process of unregistering already
 
 func RouteAudioToClients(client *Client) {
+	defer func() {
+		log.Printf("Client %s stopped routing audio\n", client.UUID)
+	}()
 	for {
 		select {
 		case packet := <-client.InboundAudio:
@@ -519,6 +525,7 @@ func handleAnswer(client *Client, message *types.WebsocketMessage) {
 }
 
 func shutdownClient(client *Client) {
+	log.Printf("Shutting down client %s\n", client.UUID)
 	client.StopRoutingAudio <- true
 	client.StopLAC <- true
 }
