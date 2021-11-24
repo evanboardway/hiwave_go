@@ -127,15 +127,11 @@ func Reader(client *Client) {
 			break
 
 		case "voice":
-			for _, member := range client.Nucleus.Clients {
-				member.Register <- client
-			}
+			register(client, client)
 			break
 
 		case "mute":
-			for _, member := range client.Nucleus.Clients {
-				member.Unregister <- client
-			}
+			unregister(client, client)
 			// log.Printf("TRIGGERED LISTING: %+v\n", client.RegisteredClients)
 			// client.RegisteredClients[client.UUID] = &types.AudioBundle{}
 
@@ -294,7 +290,6 @@ func updateClientLocation(client *Client, message *types.WebsocketMessage) {
 		Location: location,
 	}
 
-	// log.Printf("%+v\n", location)
 	client.CurrentLocation = location
 
 	// loc, err := json.Marshal(bundle)
@@ -419,7 +414,6 @@ func createPeerConnection(client *Client) {
 	client.PCMutex.Unlock()
 
 	// Start locating and connecting to other clients.
-	fmt.Printf("%s STARTING LAC\n", client.UUID)
 	go locateAndConnect(client)
 }
 
