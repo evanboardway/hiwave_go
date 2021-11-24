@@ -180,7 +180,7 @@ func Writer(client *Client) {
 func register(client *Client, registree *Client) {
 
 	// add track to client, add track to global list of senders.
-	newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, client.UUID.String(), "sfu_audio")
+	newTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "sfu_audio", client.UUID.String())
 	if err != nil {
 		log.Println(err)
 	}
