@@ -69,7 +69,6 @@ func Reader(client *Client) {
 	// If the loop ever breaks (can no longer read from the client socket)
 	// we remove the client from the nucleus and close the socket.
 	defer func() {
-		// peer connection close
 		client.Nucleus.Unsubscribe <- client
 		client.Socket.Conn.Close()
 		shutdownClient(client)
@@ -92,10 +91,6 @@ func Reader(client *Client) {
 		} else if err := json.Unmarshal(raw, &message); err != nil {
 			log.Printf("Error unmarshaling: %+v", err)
 		}
-
-		// if message.Event != "update_location" {
-		// 	log.Printf("New message from %s: %+v", client.UUID, message.Event)
-		// }
 
 		switch message.Event {
 		case "wrtc_connect":
@@ -124,17 +119,6 @@ func Reader(client *Client) {
 
 		case "mute":
 			unregister(client, client)
-			// log.Printf("TRIGGERED LISTING: %+v\n", client.RegisteredClients)
-			// client.RegisteredClients[client.UUID] = &types.AudioBundle{}
-
-			// bundle := client.RegisteredClients[client.UUID]
-
-			// log.Printf("%+v\n", bundle)
-
-			// client.WriteChan <- &types.WebsocketMessage{
-			// 	Event: "test",
-			// 	Data:  "testing",
-			// }
 			break
 
 		case "wrtc_renegotiation_needed":
@@ -159,7 +143,6 @@ func Writer(client *Client) {
 
 	for {
 		data := <-client.WriteChan
-		// log.Printf("Writing to client, %+v", data.Event)
 		err := client.Socket.Conn.WriteJSON(data)
 		if err != nil {
 			// if writing to the socket fails, function returns and defer block is called
@@ -271,9 +254,6 @@ func locateAndConnect(client *Client) {
 // locateAndConnect attempts to unregister a client while they're in the process of unregistering already
 
 func RouteAudioToClients(client *Client) {
-	defer func() {
-		log.Printf("Client %s stopped routing audio\n", client.UUID)
-	}()
 	for {
 		select {
 		case packet := <-client.InboundAudio:
@@ -293,6 +273,7 @@ func RouteAudioToClients(client *Client) {
 func updateClientLocation(client *Client, message *types.WebsocketMessage) {
 
 	location := &types.LocationData{}
+
 	if err := json.Unmarshal([]byte(message.Data), &location); err != nil {
 		log.Print(err)
 	}
@@ -303,15 +284,6 @@ func updateClientLocation(client *Client, message *types.WebsocketMessage) {
 	}
 
 	client.CurrentLocation = location
-
-	// loc, err := json.Marshal(bundle)
-	// if err != nil {
-	// 	log.Printf("Error marshaling client location: %s", err)
-	// }
-	// client.WriteChan <- &types.WebsocketMessage{
-	// 	Event: "peer_location",
-	// 	Data:  string(loc),
-	// }
 
 	client.RCMutex.RLock()
 	for uuid := range client.RegisteredClients {
@@ -391,7 +363,6 @@ func createPeerConnection(client *Client) {
 
 	// If the peer connection fails...
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		// log.Printf("Connection State has changed to %s \n", connectionState.String())
 
 		if connectionState == webrtc.ICEConnectionStateFailed {
 			client.WriteChan <- &types.WebsocketMessage{
@@ -403,10 +374,6 @@ func createPeerConnection(client *Client) {
 
 			client.PeerConnection = nil
 		}
-	})
-
-	peerConnection.OnDataChannel(func(dc *webrtc.DataChannel) {
-		fmt.Println("DATA CHAN")
 	})
 
 	peerConnection.OnTrack(func(tr *webrtc.TrackRemote, r *webrtc.RTPReceiver) {
@@ -526,6 +493,11 @@ func handleAnswer(client *Client, message *types.WebsocketMessage) {
 
 func handleDisconnect(client *Client) {
 	if client.PeerConnection != nil {
+
+		client.WriteChan <- &types.WebsocketMessage{
+			Event: "client_reset",
+			Data:  "",
+		}
 
 		client.RCMutex.RLock()
 		for uuid := range client.RegisteredClients {
