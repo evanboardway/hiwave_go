@@ -24,12 +24,6 @@ type Client struct {
 	// A channel whose data is written to the websocket.
 	WriteChan chan *types.WebsocketMessage
 
-	// A channel for registering clients to their audio stream.
-	Register chan *Client
-
-	// A channel for unregistering clients to their audio stream.
-	Unregister chan *Client
-
 	// A track referencing audio packets being sent from the client.
 	InboundAudio chan []byte
 
@@ -63,8 +57,6 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
 		Nucleus:           nucleus,
 		Socket:            safeConn,
 		WriteChan:         make(chan *types.WebsocketMessage),
-		Register:          make(chan *Client),
-		Unregister:        make(chan *Client),
 		StopRoutingAudio:  make(chan bool),
 		StopLAC:           make(chan bool),
 		RegisteredClients: make(map[uuid.UUID]*types.AudioBundle),
@@ -196,14 +188,19 @@ func register(client *Client, registree *Client) {
 		Track:       newTrack,
 	}
 
+	client.RCMutex.Lock()
 	client.RegisteredClients[registree.UUID] = bundle
+	client.RCMutex.Unlock()
 	log.Printf("Registered client %s to client %s\n", registree.UUID, client.UUID)
 }
 
 func unregister(client *Client, unregistree *Client) {
 
 	// Peer connection needs to be in a stable state, lock the client mutex.
+	client.RCMutex.RLock()
 	unregistreeBundle := client.RegisteredClients[unregistree.UUID]
+	client.RCMutex.RUnlock()
+
 	log.Printf("Unregistree audio bundle: %+v cli: %s\n", unregistreeBundle, client.UUID)
 
 	if err := unregistree.PeerConnection.RemoveTrack(unregistreeBundle.Transceiver.Sender()); err != nil {
@@ -212,7 +209,10 @@ func unregister(client *Client, unregistree *Client) {
 
 	unregistreeBundle.Transceiver.Stop()
 
+	client.RCMutex.Lock()
 	delete(client.RegisteredClients, unregistree.UUID)
+	client.RCMutex.Unlock()
+
 	log.Printf("Unregistered client %s from client %s\n", unregistree.UUID, client.UUID)
 
 	client.WriteChan <- &types.WebsocketMessage{
@@ -243,7 +243,11 @@ func locateAndConnect(client *Client) {
 
 			for peer_uuid, peer := range filtered_clients {
 				within_range := types.WithinRange(client.CurrentLocation, peer.CurrentLocation)
+
+				client.RCMutex.RLock()
 				registered := client.RegisteredClients[peer_uuid]
+				client.RCMutex.RUnlock()
+
 				if registered != nil {
 					if within_range == false {
 						client.WriteChan <- &types.WebsocketMessage{
@@ -273,9 +277,11 @@ func RouteAudioToClients(client *Client) {
 	for {
 		select {
 		case packet := <-client.InboundAudio:
+			client.RCMutex.RLock()
 			for _, registreeBundle := range client.RegisteredClients {
 				registreeBundle.Track.Write(packet)
 			}
+			client.RCMutex.RUnlock()
 			break
 		case <-client.StopRoutingAudio:
 			return
@@ -307,6 +313,7 @@ func updateClientLocation(client *Client, message *types.WebsocketMessage) {
 	// 	Data:  string(loc),
 	// }
 
+	client.RCMutex.RLock()
 	for uuid := range client.RegisteredClients {
 		loc, err := json.Marshal(bundle)
 		if err != nil {
@@ -317,6 +324,7 @@ func updateClientLocation(client *Client, message *types.WebsocketMessage) {
 			Data:  string(loc),
 		}
 	}
+	client.RCMutex.RUnlock()
 }
 
 func createPeerConnection(client *Client) {
@@ -423,14 +431,6 @@ func createPeerConnection(client *Client) {
 	go locateAndConnect(client)
 }
 
-func handleDisconnect(client *Client) {
-	if client.PeerConnection != nil {
-		client.StopRoutingAudio <- true
-		client.PeerConnection.Close()
-		client.PeerConnection = nil
-	}
-}
-
 func handleRenegotiation(client *Client, message *types.WebsocketMessage) {
 
 	remoteOffer := webrtc.SessionDescription{}
@@ -522,6 +522,22 @@ func handleAnswer(client *Client, message *types.WebsocketMessage) {
 		log.Printf("Error setting remote description: %s", err)
 	}
 
+}
+
+func handleDisconnect(client *Client) {
+	if client.PeerConnection != nil {
+
+		client.RCMutex.RLock()
+		for uuid := range client.RegisteredClients {
+			client.Nucleus.Mutex.RLock()
+			unregister(client.Nucleus.Clients[uuid], client)
+			client.Nucleus.Mutex.RUnlock()
+		}
+		client.RCMutex.RUnlock()
+		client.StopRoutingAudio <- true
+		client.PeerConnection.Close()
+		client.PeerConnection = nil
+	}
 }
 
 func shutdownClient(client *Client) {
