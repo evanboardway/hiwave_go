@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	str "strings"
 	"sync"
 
 	"github.com/evanboardway/hiwave_go/modules"
@@ -35,11 +37,23 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	remoteAddr := str.Split(r.RemoteAddr, ":")[0]
+
+	nucleus.Mutex.RLock()
+	for _, client := range nucleus.Clients {
+		if client.IpAddr == remoteAddr {
+			log.Printf("Prevented simultaneous connection from address %s with uuid %s\n", remoteAddr, client.UUID)
+			nucleus.Mutex.RUnlock()
+			return
+		}
+	}
+	nucleus.Mutex.RUnlock()
+
 	// Wrap socket in a mutex that can lock the socket for write.
 	safeConn := &types.ThreadSafeWriter{unsafeConn, sync.RWMutex{}}
 
 	// Create a new client. Give it the socket and the nucleus's phone number
-	newClient := modules.NewClient(safeConn, nucleus)
+	newClient := modules.NewClient(safeConn, nucleus, remoteAddr)
 
 	// Start the write loop for the newly created client in a go routine.
 	go modules.Writer(newClient)

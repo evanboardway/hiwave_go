@@ -21,6 +21,9 @@ type Client struct {
 	// Websocket connection
 	Socket *types.ThreadSafeWriter
 
+	// Client IP address used to ensure one connection per ip.
+	IpAddr string
+
 	// A channel whose data is written to the websocket.
 	WriteChan chan *types.WebsocketMessage
 
@@ -49,13 +52,14 @@ type Client struct {
 	RCMutex sync.RWMutex
 }
 
-func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus) *Client {
+func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus, remoteAddress string) *Client {
 	log.Printf("New client")
 
 	return &Client{
 		UUID:              uuid.New(),
 		Nucleus:           nucleus,
 		Socket:            safeConn,
+		IpAddr:            remoteAddress,
 		WriteChan:         make(chan *types.WebsocketMessage),
 		StopRoutingAudio:  make(chan bool),
 		StopLAC:           make(chan bool),
