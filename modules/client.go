@@ -36,6 +36,12 @@ type Client struct {
 	// A channel to stop locate and connect function
 	StopLAC chan bool
 
+	// A chan to signal to the handleDisconnect when the locate and connect goroutine has been stopped
+	StoppedLAC chan bool
+
+	// A channel to signal when the client has been removed from the nucleus
+	RemovedFromNucleus chan bool
+
 	// A map of client uuid (key) to outbound audio tracks (value).
 	RegisteredClients map[uuid.UUID]*types.AudioBundle
 
@@ -46,7 +52,7 @@ type Client struct {
 	CurrentLocation *types.LocationData
 
 	// A mutex to lock a client so that only one resource can modify its peer connection at a time.
-	PCMutex sync.Mutex
+	PCMutex sync.RWMutex
 
 	// A mutex to lock the registered clients list
 	RCMutex sync.RWMutex
@@ -56,15 +62,17 @@ func NewClient(safeConn *types.ThreadSafeWriter, nucleus *Nucleus, remoteAddress
 	log.Printf("New client")
 
 	return &Client{
-		UUID:              uuid.New(),
-		Nucleus:           nucleus,
-		Socket:            safeConn,
-		IpAddr:            remoteAddress,
-		WriteChan:         make(chan *types.WebsocketMessage),
-		StopRoutingAudio:  make(chan bool),
-		StopLAC:           make(chan bool),
-		RegisteredClients: make(map[uuid.UUID]*types.AudioBundle),
-		InboundAudio:      make(chan []byte, 1500),
+		UUID:               uuid.New(),
+		Nucleus:            nucleus,
+		Socket:             safeConn,
+		IpAddr:             remoteAddress,
+		WriteChan:          make(chan *types.WebsocketMessage),
+		StopRoutingAudio:   make(chan bool),
+		StopLAC:            make(chan bool),
+		RemovedFromNucleus: make(chan bool),
+		StoppedLAC:         make(chan bool),
+		RegisteredClients:  make(map[uuid.UUID]*types.AudioBundle),
+		InboundAudio:       make(chan []byte, 1500),
 	}
 }
 
@@ -73,8 +81,6 @@ func Reader(client *Client) {
 	// If the loop ever breaks (can no longer read from the client socket)
 	// we remove the client from the nucleus and close the socket.
 	defer func() {
-		client.Nucleus.Unsubscribe <- client
-		client.Socket.Conn.Close()
 		shutdownClient(client)
 	}()
 
@@ -141,8 +147,6 @@ func Reader(client *Client) {
 func Writer(client *Client) {
 	defer func() {
 		shutdownClient(client)
-		client.Socket.Conn.Close()
-		client.Nucleus.Unsubscribe <- client
 	}()
 
 	for {
@@ -231,18 +235,22 @@ func locateAndConnect(client *Client) {
 	for {
 		select {
 		case <-client.StopLAC:
+			client.StoppedLAC <- true
 			return
 		default:
 			// Compile a list of all the clients that are connected and not the same as the client param.
 			client.Nucleus.Mutex.RLock()
 			filtered_clients := make(map[uuid.UUID]*Client)
 			for _, peer := range client.Nucleus.Clients {
+				peer.PCMutex.RLock()
 				if peer.PeerConnection != nil && peer.UUID != client.UUID {
 					filtered_clients[peer.UUID] = peer
 				}
+				peer.PCMutex.RUnlock()
 			}
 			client.Nucleus.Mutex.RUnlock()
 
+			// Add a check to make sure that the peer has a peer connection object
 			for peer_uuid, peer := range filtered_clients {
 				within_range := types.WithinRange(client.CurrentLocation, peer.CurrentLocation)
 
@@ -269,8 +277,6 @@ func locateAndConnect(client *Client) {
 		}
 	}
 }
-
-// locateAndConnect attempts to unregister a client while they're in the process of unregistering already
 
 func RouteAudioToClients(client *Client) {
 	for {
@@ -391,7 +397,8 @@ func createPeerConnection(client *Client) {
 				log.Printf("Error closing the peer connection %s", closeErr)
 			}
 
-			client.PeerConnection = nil
+			log.Println("Peer connection state failed. Handling client disconnect")
+			handleDisconnect(client)
 		}
 	})
 
@@ -511,28 +518,47 @@ func handleAnswer(client *Client, message *types.WebsocketMessage) {
 }
 
 func handleDisconnect(client *Client) {
-	if client.PeerConnection != nil {
+	// Signal locate and connect goroutine to shutdown
+	client.StopLAC <- true
 
-		client.WriteChan <- &types.WebsocketMessage{
-			Event: "client_reset",
-			Data:  "",
-		}
+	// Wait until the clients locate and connect goroutine signals that it has stopped
+	<-client.StoppedLAC
 
-		client.RCMutex.RLock()
-		for uuid := range client.RegisteredClients {
-			client.Nucleus.Mutex.RLock()
-			unregister(client.Nucleus.Clients[uuid], client)
-			client.Nucleus.Mutex.RUnlock()
-		}
-		client.RCMutex.RUnlock()
-		client.StopRoutingAudio <- true
-		client.PeerConnection.Close()
-		client.PeerConnection = nil
+	client.PCMutex.Lock()
+
+	client.StopRoutingAudio <- true
+
+	// Make a copy of registered clients.
+	RegisteredClientsCopy := make(map[uuid.UUID]*Client)
+
+	client.RCMutex.RLock()
+	for uuid := range client.RegisteredClients {
+		RegisteredClientsCopy[uuid] = client.Nucleus.Clients[uuid]
 	}
+	client.RCMutex.RUnlock()
+
+	// Unregister all currently registered clients from this one.
+	for uuid := range RegisteredClientsCopy {
+		client.Nucleus.Mutex.RLock()
+		unregister(client.Nucleus.Clients[uuid], client)
+		client.Nucleus.Mutex.RUnlock()
+	}
+
+	client.PeerConnection.Close()
+
+	client.PeerConnection = nil
+
+	client.PCMutex.Unlock()
 }
 
 func shutdownClient(client *Client) {
 	log.Printf("Shutting down client %s\n", client.UUID)
-	client.StopRoutingAudio <- true
-	client.StopLAC <- true
+
+	// Unsubscribe this client from the nucleus.
+	client.Nucleus.Unsubscribe <- client
+
+	// Wait until the nucleus signals that the client has been removed
+	<-client.RemovedFromNucleus
+
+	client.Socket.Conn.Close()
 }

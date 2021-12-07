@@ -49,6 +49,7 @@ func Enable(nucleus *Nucleus) {
 			delete(nucleus.Clients, unsub.UUID)
 			log.Printf("Connected clients: %+v\n", nucleus.Clients)
 			nucleus.Mutex.Unlock()
+			unsub.RemovedFromNucleus <- true
 			log.Printf("Unsubed client %s", unsub.UUID)
 		}
 	}

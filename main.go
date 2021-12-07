@@ -65,3 +65,21 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	nucleus.Subscribe <- newClient
 
 }
+
+// Client disconnects from audio:
+// Unregister the client from everyone they're currrently registered to.
+// Stop routing audio.
+// Stop locate and connect.
+
+// Client disconnects from server.
+// Unsubscribe them from the nucleus (do this first to prevent other clients from registering to them)
+// Unregister the client from everyone they're currently registered to (if pc exists)
+// Stop routing audio.
+// Stop locate and connect
+
+// Client connects to server
+// Subscribe them to nucleus
+
+// Client connects to audio
+// Start routing audio
+// Start locate and connect
