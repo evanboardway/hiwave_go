@@ -170,13 +170,28 @@ func register(client *Client, registree *Client) {
 		log.Println(err)
 	}
 
-	bundle := &types.AudioBundle{
+	audioBundle := &types.AudioBundle{
 		Transceiver: transceiver,
 		Track:       newTrack,
 	}
 
+	locationBundle := &types.LocationBundle{
+		UUID:     client.UUID,
+		Location: client.CurrentLocation,
+	}
+
+	loc, err := json.Marshal(locationBundle)
+	if err != nil {
+		log.Printf("Error marshaling client location %s\n", err)
+	}
+
+	client.WriteChan <- &types.WebsocketMessage{
+		Event: "peer_location",
+		Data:  string(loc),
+	}
+
 	client.RCMutex.Lock()
-	client.RegisteredClients[registree.UUID] = bundle
+	client.RegisteredClients[registree.UUID] = audioBundle
 	client.RCMutex.Unlock()
 	log.Printf("Registered client %s to client %s\n", registree.UUID, client.UUID)
 }
@@ -203,7 +218,7 @@ func unregister(client *Client, unregistree *Client) {
 	log.Printf("Unregistered client %s from client %s\n", unregistree.UUID, client.UUID)
 
 	client.WriteChan <- &types.WebsocketMessage{
-		Event: "wrtc_remove_track",
+		Event: "wrtc_remove_stream",
 		Data:  unregistree.UUID.String(),
 	}
 }
