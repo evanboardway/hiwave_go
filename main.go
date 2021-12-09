@@ -17,7 +17,7 @@ var (
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
 
-	nucleus *modules.Nucleus
+	nucleus *types.Nucleus
 )
 
 func main() {
@@ -52,7 +52,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	safeConn := &types.ThreadSafeWriter{unsafeConn, sync.RWMutex{}}
 
 	// Create a new client. Give it the socket and the nucleus's phone number
-	newClient := modules.NewClient(safeConn, nucleus, remoteAddr)
+	newClient := types.NewClient(safeConn, nucleus, remoteAddr)
 
 	// Start the write loop for the newly created client in a go routine.
 	go modules.Writer(newClient)
