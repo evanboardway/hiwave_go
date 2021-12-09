@@ -42,9 +42,8 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	nucleus.Mutex.RLock()
 	for _, client := range nucleus.Clients {
 		if client.IpAddr == remoteAddr {
-			log.Printf("Prevented simultaneous connection from address %s with uuid %s\n", remoteAddr, client.UUID)
-			nucleus.Mutex.RUnlock()
-			return
+			log.Printf("Prevented simultaneous connection from address %s with uuid %s\n %+v\n", remoteAddr, client.UUID, client)
+			nucleus.Unsubscribe <- client
 		}
 	}
 	nucleus.Mutex.RUnlock()

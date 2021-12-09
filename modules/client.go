@@ -558,7 +558,7 @@ func shutdownClient(client *Client) {
 	client.Nucleus.Unsubscribe <- client
 
 	// Wait until the nucleus signals that the client has been removed
-	<-client.RemovedFromNucleus
+	// <-client.RemovedFromNucleus
 
 	client.Socket.Conn.Close()
 }
