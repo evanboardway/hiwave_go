@@ -1,6 +1,7 @@
 package types
 
 import (
+	"log"
 	"sync"
 
 	"github.com/google/uuid"
@@ -16,9 +17,23 @@ type Nucleus struct {
 	// A channel to remove clients from the nucleus
 	Unsubscribe chan *Client
 
+	// A channel for pumping statistics through
+	Stats chan string
+
 	// A map of clients subscribed to the hub
 	Clients map[uuid.UUID]*Client
 
 	// Mutex to make sub and unsub chans one user only
 	Mutex sync.RWMutex
+}
+
+// Create a nucleus and return a pointer to it.
+func CreateNucleus() *Nucleus {
+	log.Printf("New Nucleus")
+	return &Nucleus{
+		Subscribe:   make(chan *Client),
+		Unsubscribe: make(chan *Client),
+		Stats:       make(chan string, 1024),
+		Clients:     make(map[uuid.UUID]*Client),
+	}
 }

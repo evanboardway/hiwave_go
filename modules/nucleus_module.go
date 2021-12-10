@@ -4,19 +4,7 @@ import (
 	"log"
 
 	"github.com/evanboardway/hiwave_go/types"
-
-	"github.com/google/uuid"
 )
-
-// Create a nucleus and return a pointer to it.
-func CreateNucleus() *types.Nucleus {
-	log.Printf("New Nucleus")
-	return &types.Nucleus{
-		Subscribe:   make(chan *types.Client),
-		Unsubscribe: make(chan *types.Client),
-		Clients:     make(map[uuid.UUID]*types.Client),
-	}
-}
 
 func Enable(nucleus *types.Nucleus) {
 	log.Printf("Nucleus enable")

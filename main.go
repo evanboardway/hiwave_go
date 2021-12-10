@@ -22,11 +22,38 @@ var (
 
 func main() {
 	// Clients will be registered in the nucleus. Information coming from the SFU will go through the nucleus.
-	nucleus = modules.CreateNucleus()
+	nucleus = types.CreateNucleus()
+
 	go modules.Enable(nucleus)
+
 	fmt.Println("Hiwave server started")
+
+	// Connect to ws '/' for stats
+	http.HandleFunc("/", statsHandler)
+
 	http.HandleFunc("/websocket", websocketHandler)
+
 	http.ListenAndServe(":5000", nil)
+}
+
+func statsHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("stats handler")
+	unsafeConn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		fmt.Print("Error in upgrade:", err)
+		return
+	}
+
+	go func() {
+		for {
+			select {
+			case stat := <-nucleus.Stats:
+				unsafeConn.WriteJSON(stat)
+				break
+			}
+		}
+	}()
+
 }
 
 func websocketHandler(w http.ResponseWriter, r *http.Request) {

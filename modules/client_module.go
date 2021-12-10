@@ -2,6 +2,7 @@ package modules
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 
 	"github.com/evanboardway/hiwave_go/types"
@@ -10,6 +11,7 @@ import (
 )
 
 func Reader(client *types.Client) {
+	fmt.Printf("%s reader started\n", client.UUID)
 
 	// If the loop ever breaks (can no longer read from the client socket)
 	// we remove the client from the nucleus and close the socket.
@@ -61,7 +63,8 @@ func Reader(client *types.Client) {
 			break
 
 		case "mute":
-			unregister(client, client)
+			// unregister(client, client)
+			shutdownClient(client)
 			break
 
 		case "wrtc_renegotiation_needed":
@@ -78,6 +81,8 @@ func Reader(client *types.Client) {
 
 // Write to socket synchronously (unbuffered chan)
 func Writer(client *types.Client) {
+	fmt.Printf("%s writer started\n", client.UUID)
+
 	defer func() {
 		shutdownClient(client)
 	}()
@@ -112,21 +117,6 @@ func register(client *types.Client, registree *types.Client) {
 		Track:       newTrack,
 	}
 
-	locationBundle := &types.LocationBundle{
-		UUID:     client.UUID,
-		Location: client.CurrentLocation,
-	}
-
-	loc, err := json.Marshal(locationBundle)
-	if err != nil {
-		log.Printf("Error marshaling client location %s\n", err)
-	}
-
-	client.WriteChan <- &types.WebsocketMessage{
-		Event: "peer_location",
-		Data:  string(loc),
-	}
-
 	client.RCMutex.Lock()
 	client.RegisteredClients[registree.UUID] = audioBundle
 	client.RCMutex.Unlock()
@@ -135,10 +125,10 @@ func register(client *types.Client, registree *types.Client) {
 
 func unregister(client *types.Client, unregistree *types.Client) {
 
-	// Peer connection needs to be in a stable state, lock the client mutex.
-	client.RCMutex.RLock()
+	client.RCMutex.Lock()
 	unregistreeBundle := client.RegisteredClients[unregistree.UUID]
-	client.RCMutex.RUnlock()
+	delete(client.RegisteredClients, unregistree.UUID)
+	client.RCMutex.Unlock()
 
 	log.Printf("Unregistree audio bundle: %+v cli: %s\n", unregistreeBundle, client.UUID)
 
@@ -147,10 +137,6 @@ func unregister(client *types.Client, unregistree *types.Client) {
 	}
 
 	unregistreeBundle.Transceiver.Stop()
-
-	client.RCMutex.Lock()
-	delete(client.RegisteredClients, unregistree.UUID)
-	client.RCMutex.Unlock()
 
 	log.Printf("Unregistered client %s from client %s\n", unregistree.UUID, client.UUID)
 
@@ -241,20 +227,23 @@ func updateClientLocation(client *types.Client, message *types.WebsocketMessage)
 		Location: location,
 	}
 
+	locationMarshaled, err := json.Marshal(bundle)
+	if err != nil {
+		log.Printf("Error marshaling client location: %s", err)
+	}
+
 	client.CurrentLocation = location
 
-	client.RCMutex.RLock()
-	for uuid := range client.RegisteredClients {
-		loc, err := json.Marshal(bundle)
-		if err != nil {
-			log.Printf("Error marshaling client location: %s", err)
-		}
-		client.Nucleus.Clients[uuid].WriteChan <- &types.WebsocketMessage{
-			Event: "peer_location",
-			Data:  string(loc),
+	client.Nucleus.Mutex.RLock()
+	for uuid, peer := range client.Nucleus.Clients {
+		if uuid != client.UUID {
+			peer.WriteChan <- &types.WebsocketMessage{
+				Event: "peer_location",
+				Data:  string(locationMarshaled),
+			}
 		}
 	}
-	client.RCMutex.RUnlock()
+	client.Nucleus.Mutex.RUnlock()
 }
 
 func handleDisconnect(client *types.Client) {
@@ -279,9 +268,7 @@ func handleDisconnect(client *types.Client) {
 
 	// Unregister all currently registered clients from this one.
 	for uuid := range RegisteredClientsCopy {
-		client.Nucleus.Mutex.RLock()
 		unregister(client.Nucleus.Clients[uuid], client)
-		client.Nucleus.Mutex.RUnlock()
 	}
 
 	client.PeerConnection.Close()
@@ -298,7 +285,20 @@ func shutdownClient(client *types.Client) {
 	client.Nucleus.Unsubscribe <- client
 
 	// Wait until the nucleus signals that the client has been removed
-	// <-client.RemovedFromNucleus
+	temp := <-client.RemovedFromNucleus
+
+	log.Printf("%s Removed from nucleus, %+v", client.UUID, temp)
+
+	client.Nucleus.Mutex.RLock()
+	for uuid, peer := range client.Nucleus.Clients {
+		if uuid != client.UUID {
+			peer.WriteChan <- &types.WebsocketMessage{
+				Event: "peer_disconnected",
+				Data:  client.UUID.String(),
+			}
+		}
+	}
+	client.Nucleus.Mutex.RUnlock()
 
 	client.Socket.Conn.Close()
 }
