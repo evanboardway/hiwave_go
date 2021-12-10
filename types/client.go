@@ -12,6 +12,9 @@ type Client struct {
 	// The identifier that the client is stored as in the Nucleus.
 	UUID uuid.UUID
 
+	// The current avatar that the user has selected
+	Avatar string
+
 	// a pointer to the nucleus so that we can access its channels.
 	Nucleus *Nucleus
 
@@ -60,6 +63,7 @@ func NewClient(safeConn *ThreadSafeWriter, nucleus *Nucleus, remoteAddress strin
 
 	return &Client{
 		UUID:               uuid.New(),
+		Avatar:             "",
 		Nucleus:            nucleus,
 		Socket:             safeConn,
 		IpAddr:             remoteAddress,
