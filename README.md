@@ -31,3 +31,6 @@
 
 
 ![Hiwave_Poster](https://user-images.githubusercontent.com/47399926/144283382-266abe90-1de6-4ae6-8aff-5beed76ee9fc.png)
+
+
+[Hiwave_capstone_presentation.pdf](https://github.com/evanboardway/hiwave_go/files/7700057/Hiwave_capstone_presentation.pdf)
