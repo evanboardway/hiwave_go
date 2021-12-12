@@ -1,9 +1,11 @@
 # hiwave_go
 
+![Hiwave_Poster](https://user-images.githubusercontent.com/47399926/144283382-266abe90-1de6-4ae6-8aff-5beed76ee9fc.png)
+
+
 ## Prospectus
 
 * https://docs.google.com/document/d/1mYW9mLTPCfjJ_mvtsdo_6e7e_DcIxygKU-sfS5UlDrM/edit?usp=sharing
-
 
 ## Feasibility Study
 
@@ -28,9 +30,6 @@
 ## Sprint 5 Report
 
 * https://docs.google.com/document/d/1WkXGC23RtIso4tw0lHeMhdSAIEndNsurg69oijJ0BUc/edit?usp=sharing
-
-
-![Hiwave_Poster](https://user-images.githubusercontent.com/47399926/144283382-266abe90-1de6-4ae6-8aff-5beed76ee9fc.png)
 
 ## Final Presentation Lightning Slides
 
