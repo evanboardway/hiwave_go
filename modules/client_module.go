@@ -243,10 +243,10 @@ func updateClientLocation(client *types.Client, message *types.WebsocketMessage)
 	client.Nucleus.Mutex.RLock()
 	for uuid, peer := range client.Nucleus.Clients {
 		if uuid != client.UUID {
-		}
-		peer.WriteChan <- &types.WebsocketMessage{
-			Event: "peer_location",
-			Data:  string(locationMarshaled),
+			peer.WriteChan <- &types.WebsocketMessage{
+				Event: "peer_location",
+				Data:  string(locationMarshaled),
+			}
 		}
 	}
 	client.Nucleus.Mutex.RUnlock()
