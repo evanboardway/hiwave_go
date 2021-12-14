@@ -24,6 +24,7 @@ type LocationData struct {
 type LocationBundle struct {
 	UUID     uuid.UUID
 	Location *LocationData
+	Avatar   string
 }
 
 func WithinRange(from *LocationData, to *LocationData) bool {
