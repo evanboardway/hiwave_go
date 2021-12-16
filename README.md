@@ -34,3 +34,7 @@
 ## Final Presentation Lightning Slides
 
 [Hiwave_capstone_presentation.pdf](https://github.com/evanboardway/hiwave_go/files/7700057/Hiwave_capstone_presentation.pdf)
+
+## Final Report
+
+[Hiwave Final Report.pdf](https://github.com/evanboardway/hiwave_go/files/7729830/Hiwave.Final.Report.pdf)
